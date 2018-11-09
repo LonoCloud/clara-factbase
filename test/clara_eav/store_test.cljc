@@ -31,6 +31,7 @@
 
 (def store
   {:max-eid 1
+   :options store/default-options
    :eav-index {0 {:todo/text "Buy eggs"}
                1 {:todo/tag :not-cheese}}})
 

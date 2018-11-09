@@ -14,7 +14,7 @@
 (deftest session-test
   (testing "Session delegation"
     (let [session-spy (protocol/spy engine/ISession)
-          wrapper (session/wrap session-spy)]
+          wrapper (session/wrap session-spy store/default-options)]
       (are [x] (session/session? x)
         (engine/insert wrapper [])
         (engine/retract wrapper [])
@@ -30,6 +30,6 @@
   (testing "Store binding"
     (let [is-binded (fn [& _] (is (= store/init @store/*store*)))
           spy (protocol/spy engine/ISession {:fire-rules (spy/spy is-binded)})
-          wrapper (session/wrap spy)]
+          wrapper (session/wrap spy store/default-options)]
       (engine/fire-rules wrapper)
       (is (spy/called-once? (:fire-rules (meta spy)))))))

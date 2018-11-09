@@ -116,7 +116,6 @@
               new1 (todo session1 :new))
           _ (test-session eav-index session1)
 
-
           ;; - upsert via call
           ;; - upsert! via milk2-and-cookies-r rule
           ;; - entity accumulator via todo-q query

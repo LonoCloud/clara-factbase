@@ -10,6 +10,19 @@
   mechanisms from Clara."
   nil)
 
+(s/def ::ident ::eav/a)
+(s/def ::cardinality #{:cardinality/one :cardinality/many})
+(s/def ::valueType (s/or :spec s/spec? :ref #{:value.type/ref}))
+(s/def ::doc string?)
+(s/def ::unique #{:unique/identity :unique/value})
+(s/def ::id ::eav/e)
+(s/def ::isComponent boolean?)
+(s/def ::schema-entry
+  (s/keys :req [::ident ::cardinality ::valueType]
+          :opt [::doc ::unique ::isComponent])) ; ::id
+(s/def ::schema
+  (s/coll-of ::schema-entry))
+
 (s/def ::e
   (s/or :string string?
         :keyword keyword?
@@ -31,13 +44,23 @@
 (s/def ::insertables ::eav/record-seq)
 (s/def ::retractables ::eav/record-seq)
 (s/def ::tempids (s/map-of tempid? integer?))
-(s/def ::store (s/keys :req-un [::max-eid ::eav-index]))
+(s/def ::validation-mode #{:enforce :warn :ignore})
+(s/def ::schema-mode ::validation-mode)
+(s/def ::typecheck-mode ::validation-mode)
+(s/def ::options (s/keys :req-un [::schema ::schema-mode ::typecheck-mode]))
+(s/def ::store (s/keys :req-un [::max-eid ::eav-index ::options]))
 (s/def ::store-tx
   (s/keys :req-un [::max-eid ::eav-index]
           :opt-un [::insertables ::retractables ::tempids]))
 
+(def default-options
+  {:schema []
+   :schema-mode :ignore
+   :typecheck-mode :ignore})
+
 (def init
   {:max-eid 0
+   :options default-options
    :eav-index {}})
 
 (s/fdef state
@@ -47,7 +70,7 @@
   "Remove extra keys from intermediary steps of computations and returns just
   the store state."
   [store]
-  (select-keys store [:max-eid :eav-index]))
+  (select-keys store [:max-eid :eav-index :options]))
 
 (s/fdef dump-entity-maps
   :args (s/cat :store ::store-tx)
@@ -96,7 +119,7 @@
   updated `store` including `:insertables` eavs, `:retractables` eavs and
   resolved `:tempids` map of {tempid -> eid}."
   [store eav]
-  (let [{:keys [tempids max-eid eav-index]} store
+  (let [{:keys [tempids max-eid eav-index options]} store
         {:keys [e a v]} eav
         transient? (= :eav/transient a)]
     (if (tempid? e)
