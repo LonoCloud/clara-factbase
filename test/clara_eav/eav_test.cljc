@@ -6,8 +6,8 @@
         :cljs [[cljs.test :refer-macros [deftest testing is are use-fixtures]]
                [cljs.spec.alpha :as s]
                [clara-eav.eav :as eav :refer [EAV]]])
-              [clojure.set :as set])
-  #?(:clj (:import 
+       [clojure.set :as set])
+  #?(:clj (:import
             (clara_eav.eav EAV)
             (clojure.lang Associative)
             (java.util UUID))))

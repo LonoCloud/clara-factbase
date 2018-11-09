@@ -1,6 +1,6 @@
 (ns ^:no-doc clara-eav.dsl
   "Minor sugar over Clara-Rules Expressions such that fact expressions can also
-  be given in `[E A V]` triplet form, expanding to `[A (= (:e this) E) (= (:v 
+  be given in `[E A V]` triplet form, expanding to `[A (= (:e this) E) (= (:v
   this) V)]`. We define a parser over expressions that makes the conversions.
   Standard Clara-Rules Expressions remain valid syntax except the extreme case
   where you would want `fact-type-fn` to return vectors, which is unlikely."
@@ -75,7 +75,7 @@
 
 (s/def ::test (s/tuple #{:test} ::sexp))
 
-(s/def ::accumulator-fn (s/or ::ifn ifn? 
+(s/def ::accumulator-fn (s/or ::ifn ifn?
                               ::sexp ::sexp))
 (s/def ::accumulator (s/tuple ::bind #{'<-} ::accumulator-fn #{:from} ::fact))
 
@@ -113,8 +113,8 @@
     :else node))
 
 (defn- transform
-  "Convert the ClaraEAV form containing triplets to plain Clara rule based on 
-  the EAV type by walking each node of the input using prewalk and replacing 
+  "Convert the ClaraEAV form containing triplets to plain Clara rule based on
+  the EAV type by walking each node of the input using prewalk and replacing
   `::fact-eav` nodes with `::fact-clara` nodes."
   [spec form-eav]
   (->> form-eav
@@ -125,7 +125,7 @@
 (defmacro defrule
   "Like Clara-Rules defrule but with support for EAV fact expressions."
   [name & form-eav]
-  `(rules/defrule ~name 
+  `(rules/defrule ~name
      ~@(transform ::defrule form-eav)))
 
 (defmacro defquery

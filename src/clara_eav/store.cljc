@@ -44,7 +44,7 @@
   :args (s/cat :store ::store-tx)
   :ret ::store)
 (defn state
-  "Remove extra keys from intermediary steps of computations and returns just 
+  "Remove extra keys from intermediary steps of computations and returns just
   the store state."
   [store]
   (select-keys store [:max-eid :eav-index]))
@@ -93,7 +93,7 @@
   :ret ::store-tx)
 (defn- +eav
   "Adds `eav` to `store` updating it's `:max-eid` and `:eav-index`. Returns the
-  updated `store` including `:insertables` eavs, `:retractables` eavs and 
+  updated `store` including `:insertables` eavs, `:retractables` eavs and
   resolved `:tempids` map of {tempid -> eid}."
   [store eav]
   (let [{:keys [tempids max-eid eav-index]} store

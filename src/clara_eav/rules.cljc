@@ -159,7 +159,7 @@
 
 (def entity
   "Clara-Rules Accumulator that accumulates EAVs in an entity map.
-  Make sure to filter such that all EAVs returned have the eid, or you get 
-  whatever entity is first. Ex: `[?new-todo-template <- ce/entity :from 
+  Make sure to filter such that all EAVs returned have the eid, or you get
+  whatever entity is first. Ex: `[?new-todo-template <- ce/entity :from
   [[:new-todo]]]`."
   (accumulators/grouping-by :e groups->first-entity))
