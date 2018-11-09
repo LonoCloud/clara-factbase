@@ -34,7 +34,7 @@
     (let [calls (atom {})
           noop (fn [])
           session (spy calls noop)
-          wrapper (session/wrap session)]
+          wrapper (session/wrap session store/default-options)]
       (are [x] (session/session? x)
         (engine/insert wrapper [])
         (engine/retract wrapper [])
@@ -51,6 +51,6 @@
     (let [binded #(is (= store/init @store/*store*))
           calls (atom {})
           session (spy calls binded)
-          wrapper (session/wrap session)]
+          wrapper (session/wrap session store/default-options)]
       (engine/fire-rules wrapper)
       (is (= 1 (:fire-rules @calls))))))

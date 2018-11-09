@@ -48,10 +48,10 @@
 (s/def ::isession isession?)
 
 (s/fdef wrap
-  :args (s/cat :isession ::isession)
+  :args (s/cat :isession ::isession :options ::store/options)
   :ret ::session)
 (defn wrap
   "Wraps a Clara Rules Session with a `SessionWrapper` that keeps track of
   extra state in a store, as needed by ClaraEAV."
-  [isession]
-  (->SessionWrapper isession store/init))
+  [isession options]
+  (->SessionWrapper isession (assoc store/init :options options)))

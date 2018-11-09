@@ -24,17 +24,25 @@
 
 ;; Session
 
+(s/fdef defsession*
+  :args (s/cat :name symbol?
+               :options (s/or :symbol symbol? :option-map ::store/options)
+               :nss (s/coll-of symbol?)))
+(defmacro defsession*
+  [name options & nss]
+  `(do (rules/defsession ~name 'clara-eav.rules ~@nss
+         :fact-type-fn eav/fact-type-fn
+         :ancestors-fn eav/ancestors-fn)
+       ~(if (:ns &env)
+          `(set! ~name (session/wrap ~name ~options)) ; cljs
+          `(alter-var-root #'~name #(session/wrap % ~options))))) ; clj
+
 (defmacro defsession
   "Wrapper on  Clara-Rules defsession with EAV's `:fact-type-fn` and
   `:ancestors-fn`. Pass name and namespaces `(defsession my-session 'my.rules
   'my.more.rules)`."
   [name & nss]
-  `(do (rules/defsession ~name 'clara-eav.rules ~@nss
-         :fact-type-fn eav/fact-type-fn
-         :ancestors-fn eav/ancestors-fn)
-       ~(if (:ns &env)
-          `(set! ~name (session/wrap ~name))
-          `(alter-var-root #'~name session/wrap))))
+  `(defsession* ~name ~store/default-options ~@nss))
 
 ;; Rules and Queries
 
