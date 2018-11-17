@@ -47,21 +47,33 @@
 (s/def ::validation-mode #{:enforce :warn :ignore})
 (s/def ::schema-mode ::validation-mode)
 (s/def ::typecheck-mode ::validation-mode)
-(s/def ::options (s/keys :req-un [::schema ::schema-mode ::typecheck-mode]))
-(s/def ::store (s/keys :req-un [::max-eid ::eav-index ::options]))
+(s/def ::options (s/keys :opt-un [::schema ::schema-mode ::typecheck-mode]))
+(s/def ::store (s/keys :req-un [::max-eid ::options ::eav-index]
+                       :opt-un [::schema-mode ::typecheck-mode]))
 (s/def ::store-tx
-  (s/keys :req-un [::max-eid ::eav-index]
-          :opt-un [::insertables ::retractables ::tempids]))
+  (s/merge ::store
+           (s/keys :opt-un [::insertables ::retractables ::tempids])))
 
 (def default-options
   {:schema []
    :schema-mode :ignore
    :typecheck-mode :ignore})
 
-(def init
+(def default-store
   {:max-eid 0
    :options default-options
    :eav-index {}})
+
+(s/fdef init
+  :args (s/cat :options ::options)
+  :ret ::store)
+(defn init
+  [options]
+  (s/assert ::options options)
+  (let [merged-options (merge default-options options)
+        {:keys [schema schema-mode typecheck-mode]} merged-options
+        store (merge default-store {:options merged-options})]
+    store))
 
 (s/fdef state
   :args (s/cat :store ::store-tx)
@@ -70,7 +82,7 @@
   "Remove extra keys from intermediary steps of computations and returns just
   the store state."
   [store]
-  (select-keys store [:max-eid :eav-index :options]))
+  (select-keys store [:max-eid :options :eav-index]))
 
 (s/fdef dump-entity-maps
   :args (s/cat :store ::store-tx)

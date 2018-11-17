@@ -28,7 +28,7 @@
           :query)
         (is (spy/called-n-times? (:fire-rules spies) 2)))))
   (testing "Store binding"
-    (let [is-binded (fn [& _] (is (= store/init @store/*store*)))
+    (let [is-binded (fn [& _] (is (= (store/init store/default-options) @store/*store*)))
           spy (protocol/spy engine/ISession {:fire-rules (spy/spy is-binded)})
           wrapper (session/wrap spy store/default-options)]
       (engine/fire-rules wrapper)

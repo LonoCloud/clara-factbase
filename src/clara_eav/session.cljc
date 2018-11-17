@@ -54,4 +54,4 @@
   "Wraps a Clara Rules Session with a `SessionWrapper` that keeps track of
   extra state in a store, as needed by ClaraEAV."
   [isession options]
-  (->SessionWrapper isession (assoc store/init :options options)))
+  (->SessionWrapper isession (store/init options)))
