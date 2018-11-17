@@ -11,11 +11,13 @@
 (deftest state-test
   (testing "Store cleaned after transaction computation"
     (let [store {:max-eid 0
-                 :eav-index {}}
+                 :eav-index {}
+                 :options {}}
           store-tx (assoc store
                      :insertables []
                      :retractables []
-                     :tempids {})]
+                     :tempids {}
+                     :options {})]
       (is (= store (store/state store-tx))))))
 
 (deftest tempid?-test

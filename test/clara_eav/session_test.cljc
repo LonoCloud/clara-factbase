@@ -48,7 +48,7 @@
         :fire-rules 2)))
 
   (testing "Store binding"
-    (let [binded #(is (= store/init @store/*store*))
+    (let [binded #(is (= (store/init store/default-options) @store/*store*))
           calls (atom {})
           session (spy calls binded)
           wrapper (session/wrap session store/default-options)]
