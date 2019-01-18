@@ -21,7 +21,7 @@
 (deftest tempid?-test
   (testing "Are tempids"
     (are [x] (#'store/tempid? x)
-      "my-id" 
+      "my-id"
       -7))
   (testing "Are not tempids"
     (are [x] (not (#'store/tempid? x))
@@ -46,49 +46,24 @@
    (eav/->EAV :do :eav/transient "something")
    (eav/->EAV -9 :eav/transient "something")])
 
-(def insertables'
-  [(eav/->EAV 2 :todo/text "Buy milk")
-   (eav/->EAV 2 :todo/tag :milk)
-   (eav/->EAV 0 :todo/tag :eggs)
-   (eav/->EAV 3 :todo/text "Buy ham")
-   (eav/->EAV 3 :todo/tag :ham)
-   (eav/->EAV 1 :todo/text "Buy cheese")
-   (eav/->EAV 1 :todo/tag :cheese)
-   (eav/->EAV :do :eav/transient "something")
-   (eav/->EAV 4 :eav/transient "something")])
-
-(def retractables'
-  [(eav/->EAV 1 :todo/tag :not-cheese)])
-
-(def tempids'
-  {"todo1-id" 2
-   -3 3
-   -9 4})
-
 (def eav-index'
-  {0 #:todo{:tag :eggs
-            :text "Buy eggs"}
-   1 #:todo{:tag :cheese
-            :text "Buy cheese"}
-   2 #:todo{:tag :milk
-            :text "Buy milk"}
-   3 #:todo{:tag :ham
-            :text "Buy ham"}})
+  [#:todo{:tag :eggs
+          :text "Buy eggs"}
+   #:todo{:tag :cheese
+          :text "Buy cheese"}
+   #:todo{:tag :milk
+          :text "Buy milk"}
+   #:todo{:tag :ham
+          :text "Buy ham"}])
 
 (deftest -eavs-test
-  (testing "Tempids are replaced with generated eids, eids are left alone"
-    (let [store' (store/-eavs store [(eav/->EAV 1 :todo/tag :not-cheese)])
-          {:keys [retractables max-eid eav-index]} store']
-      (are [x y] (= x y)
-        retractables' retractables
-        max-eid 1
-        {0 #:todo{:text "Buy eggs"}} eav-index))))
+  (testing "Entity removed from store, others are left alone"
+    (are [s s'] (test-helper/set= s (-> s' store/dump-entity-maps test-helper/strip-ids))
+      [#:todo{:text "Buy eggs"}]
+      (store/-eavs store [(eav/->EAV 1 :todo/tag :not-cheese)]))))
 
 (deftest +eavs-test
-  (testing "Tempids to eids, index updated, retractables detected"
-    (is (= {:insertables insertables'
-            :retractables retractables'
-            :tempids tempids'
-            :max-eid 4
-            :eav-index eav-index'}
-           (store/+eavs store eavs)))))
+  (testing "Entities added to store, entities updated in store, tempids to eids"
+    (are [s s'] (= s (-> s' store/dump-entity-maps test-helper/strip-ids))
+      eav-index' (store/+eavs store eavs))))
+

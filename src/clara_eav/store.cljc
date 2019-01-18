@@ -56,7 +56,7 @@
   "Dump all entity maps from the given `store`."
   [{:keys [eav-index]}]
   (map (fn [[e avs]]
-         (assoc avs :db/id e))
+         (assoc avs :eav/eid e))
        eav-index))
 
 (s/fdef -eav
