@@ -7,3 +7,11 @@
   (st/instrument)
   (f)
   (st/unstrument))
+
+(defmulti strip-ids (fn [s] (type s)))
+(defmethod strip-ids clojure.lang.PersistentArrayMap
+  [entity] (dissoc entity :db/id))
+(defmethod strip-ids :default
+  [collection] (map strip-ids collection))
+
+(defn set= [& vectors] (apply = (map set vectors)))
