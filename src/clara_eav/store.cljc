@@ -49,6 +49,16 @@
   [store]
   (select-keys store [:max-eid :eav-index]))
 
+(s/fdef dump-entity-maps
+  :args (s/cat :store ::store-tx)
+  :ret ::eav/entity-seq)
+(defn dump-entity-maps
+  "Dump all entity maps from the given `store`."
+  [{:keys [eav-index]}]
+  (map (fn [[e avs]]
+         (assoc avs :db/id e))
+       eav-index))
+
 (s/fdef -eav
   :args (s/cat :store ::store-tx
                :eav ::eav/record)
