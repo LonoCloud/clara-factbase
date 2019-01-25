@@ -4,7 +4,6 @@
             [clara-eav.test-helper :as th]
     #?(:clj [clojure.test :refer [deftest testing is are use-fixtures]]
        :cljs [cljs.test :refer-macros [deftest testing is are use-fixtures]]))
-  (:use clojure.test)
   #?(:clj (:import (clojure.lang ExceptionInfo))))
 
 (use-fixtures :once th/spec-fixture)

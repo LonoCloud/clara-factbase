@@ -9,7 +9,8 @@
   (st/unstrument))
 
 (defmulti strip-ids (fn [s] (type s)))
-(defmethod strip-ids clojure.lang.PersistentArrayMap
+(defmethod strip-ids #?(:clj clojure.lang.PersistentArrayMap
+                        :cljs cljs.core.PersistentArrayMap)
   [entity] (dissoc entity :db/id))
 (defmethod strip-ids :default
   [collection] (map strip-ids collection))
