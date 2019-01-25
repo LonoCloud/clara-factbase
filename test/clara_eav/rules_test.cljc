@@ -1,8 +1,8 @@
 (ns clara-eav.rules-test
   (:require [clara-eav.test-helper :as test-helper]
+            [clara-eav.store :as store]
     #?@(:clj [[clara.rules :as rules]
               [clara-eav.rules :as eav.rules]
-              [clara-eav.store :as store]
               [clojure.test :refer [deftest testing is are use-fixtures]]]
         :cljs [[clara.rules :as rules :include-macros true]
                [clara-eav.rules :as eav.rules :include-macros true]
