@@ -10,14 +10,11 @@
 
 (deftest state-test
   (testing "Store cleaned after transaction computation"
-    (let [store {:max-eid 0
-                 :eav-index {}
-                 :options {}}
+    (let [store (store/init {})
           store-tx (assoc store
                      :insertables []
                      :retractables []
-                     :tempids {}
-                     :options {})]
+                     :tempids {})]
       (is (= store (store/state store-tx))))))
 
 (deftest tempid?-test
@@ -32,10 +29,10 @@
       #uuid"8ed62381-c3ef-4174-ae8d-87789416bf65")))
 
 (def store
-  {:max-eid 1
-   :options store/default-options
-   :eav-index {0 {:todo/text "Buy eggs"}
-               1 {:todo/tag :not-cheese}}})
+  (merge store/default-store
+         {:max-eid 1
+          :eav-index {0 {:todo/text "Buy eggs"}
+                      1 {:todo/tag :not-cheese}}}))
 
 (def eavs
   [(eav/->EAV "todo1-id" :todo/text "Buy milk")
