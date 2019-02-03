@@ -24,9 +24,11 @@
 
 ;; Session
 
+;; add mk-session and rewrite defsession around that?
+
 (s/fdef defsession*
   :args (s/cat :name symbol?
-               :options (s/or :symbol symbol? :option-map ::store/options)
+               :options any? ;(s/or :symbol symbol? :option-map ::store/options)
                :nss (s/coll-of symbol?)))
 (defmacro defsession*
   [name options & nss]
