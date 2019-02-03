@@ -5,6 +5,7 @@
                  :url "https://github.com/clyfe/clara-eav/blob/master/LICENSE"}
   :dependencies [[org.clojure/clojure "1.10.1"]
                  [org.clojure/core.match "1.0.0"]
+                 [org.clojure/spec.alpha "0.2.176"]
                  [medley "1.3.0"]
                  [com.cerner/clara-rules "0.21.0"]]
   :plugins [[lein-cljsbuild "1.1.8" :exclusions [org.clojure/clojure]]
@@ -23,4 +24,10 @@
                                 :compiler {:output-to "target/main.js"
                                            :output-dir "target"
                                            :main clara-eav.test-runner
-                                           :optimizations :simple}}]}}})
+                                           :optimizations :simple}}]}
+          :dependencies [[org.clojure/test.check "0.10.0-alpha3"]
+                         [expound "0.7.1"]]
+          :injections [(do (require '[expound.alpha :as expound])
+                           (require '[clojure.spec.alpha :as s])
+                           (s/check-asserts true)
+                           #_(set! s/*explain-out* expound/printer))]}})
