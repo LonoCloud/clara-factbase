@@ -8,6 +8,7 @@
             [clara-eav.eav :as eav]
             [clara-eav.session :as session]
             [clara-eav.store :as store]
+            [clara-eav.util :as util]
     #?@(:clj [[clojure.spec.alpha :as s]
               [clara-eav.dsl :as dsl]]
         :cljs [[cljs.spec.alpha :as s]]))
@@ -28,13 +29,14 @@
 
 (s/fdef defsession*
   :args (s/cat :name symbol?
-               :options any? ;(s/or :symbol symbol? :option-map ::store/options)
+               :options any?
                :nss (s/coll-of symbol?)))
 (defmacro defsession*
   [name options & nss]
   `(do (rules/defsession ~name 'clara-eav.rules ~@nss
          :fact-type-fn eav/fact-type-fn
          :ancestors-fn eav/ancestors-fn)
+       (util/assert-spec ::store/options ~options)
        ~(if (:ns &env)
           `(set! ~name (session/wrap ~name ~options)) ; cljs
           `(alter-var-root #'~name #(session/wrap % ~options))))) ; clj
