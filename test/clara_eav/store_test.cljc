@@ -2,9 +2,12 @@
   (:require [clara-eav.eav :as eav]
             [clara-eav.store :as store]
             [clara-eav.test-helper :as test-helper]
-    #?(:clj [clojure.test :refer [deftest testing is are use-fixtures]]
-       :cljs [cljs.test :refer-macros [deftest testing is are use-fixtures]]))
-  #?(:clj (:import (clojure.lang ExceptionInfo))))
+            [clojure.set :as set]
+            [medley.core :as medley]
+            #?@(:clj [[clojure.spec.alpha :as s]
+                      [clojure.test :refer [deftest testing is are use-fixtures]]]
+                :cljs [[cljs.spec.alpha :as s]
+                       [cljs.test :refer-macros [deftest testing is are use-fixtures]]])))
 
 (use-fixtures :once test-helper/spec-fixture)
 
@@ -27,6 +30,91 @@
       :global
       10
       #uuid"8ed62381-c3ef-4174-ae8d-87789416bf65")))
+
+(def eav-record (eav/->EAV 1 :todo/done true))
+(def eav-vector [1 :todo/done true])
+
+(defn rand-uuid []
+  (str (medley/random-uuid)))
+
+(deftest eav-spec-test
+  (testing "Are eav records."
+    (are [x y] (= x (s/valid? ::store/eav y))
+         true eav-record
+         true eav-vector
+         true (assoc eav-vector 0 (rand-uuid))
+         false (assoc eav-record :a "not-a-keyword")
+         false (assoc eav-vector 1 "not-a-keyword")
+         false (conj eav-vector "4th element")
+         false 1)))
+
+(def new-todo
+  {:todo/text "Buy milk"
+   :todo/done false})
+
+(def saved-todo
+  {:eav/eid 10
+   :todo/text "Buy eggs"
+   :todo/done true})
+
+(def saved-todo-eavs
+  #{(eav/->EAV 10 :todo/text "Buy eggs")
+    (eav/->EAV 10 :todo/done true)})
+
+(deftest entity->eav-seq-test
+  (testing "Entity map to EAVs with tempids"
+    (let [eav-seq (#'store/entity->eav-seq new-todo)
+          eids (map (comp second first) eav-seq)]
+      (is (= 2 (count eav-seq)))
+      (is (every? string? eids))
+      (is (apply = eids))))
+  (testing "Entity map to EAVs with eids"
+    (is (= saved-todo-eavs (set (#'store/entity->eav-seq saved-todo))))))
+
+(def list1 (list eav-record))
+(def list2 (list eav-record eav-record))
+
+(defn eid-of [eavs a' v']
+  (let [=av (fn [[e a v]]
+              (when (and (= a a') (= v v'))
+                e))
+        eid (some =av eavs)]
+    (if eid
+      eid
+      (throw (ex-info (str "EID for " a' " and " v' " not found") {})))))
+
+(deftest eav-seq-test
+  (testing "Converts EAVs and lists of EAVs to a eav sequence"
+    (are [x y] (= x (store/eav-seq y))
+      list1 eav-record
+      list1 eav-vector
+      list1 list1
+      list1 (list eav-vector)
+      list2 list2
+      list2 (list eav-vector eav-vector)
+      list2 (list eav-vector eav-record)
+      list2 (list eav-record eav-vector)))
+  (testing "Converts a new entity map to a eav sequence"
+    (let [eav-seq (store/eav-seq new-todo)
+          eid1 (eid-of eav-seq :todo/text "Buy milk")
+          eid2 (eid-of eav-seq :todo/done false)]
+      (is (= 2 (count eav-seq)))
+      (is (= eid1 eid2))
+      (is (string? eid1))
+      (is (string? eid2))))
+  (testing "Converts a saved entity map to a eav sequence"
+    (let [eav-seq (store/eav-seq saved-todo)]
+      (is (= saved-todo-eavs
+             (set eav-seq)))))
+  (testing "Converts a list of entity maps to a EAVs sequence"
+    (let [eav-seq (store/eav-seq (list new-todo saved-todo))
+          eid1 (eid-of eav-seq :todo/text "Buy milk")
+          eid2 (eid-of eav-seq :todo/done false)]
+      (is (= 4 (count eav-seq)))
+      (is (= eid1 eid2))
+      (is (string? eid1))
+      (is (string? eid2))
+      (is (set/subset? saved-todo-eavs (set eav-seq))))))
 
 (def store
   (merge store/default-store
@@ -107,23 +195,23 @@
     :tx-overwrite-mode :enforce
     :schema full-schema }))
 
-(def foo      #:schema{:db/id 1    :foo 1})
-(def bar      #:schema{:db/id 2    :bar 2})
-(def tina     #:schema{:db/id -1   :name "Tina" :ssn 123 :id 777 :parking-space 1})
-(def tina-age #:schema{:db/id "t1" :age 73 :ssn 123})
-(def tina-kid1 #:schema {:db/id -1 :child -3})
-(def tina-kid2 #:schema {:db/id -1 :child -7})
-(def tina-boss #:schema {:db/id -1 :boss -6})
-(def bob      #:schema{:db/id -3   :name "Bob" :ssn 345 :parking-space 1})
-(def bob-foo  #:schema{:db/id 88   :ssn 345 :foo 7})
-(def bob-age  #:schema{:db/id 88   :age 77})
-(def arlan    #:schema{:db/id -4   :name "Arlan" :ssn 456 :id 888 :parking-space 2})
-(def mal      #:schema{:db/id -5   :name "Mal" :ssn 123 :id 888 :parking-space 9})
-(def may      #:schema{:db/id -6   :name "May" :ssn 234 :parking-space 10})
-(def franz    #:schema{:db/id -7   :name "Franz" :ssn 345 :parking-space 11})
+(def foo      #:schema{:eav/eid 1    :foo 1})
+(def bar      #:schema{:eav/eid 2    :bar 2})
+(def tina     #:schema{:eav/eid -1   :name "Tina" :ssn 123 :id 777 :parking-space 1})
+(def tina-age #:schema{:eav/eid "t1" :age 73 :ssn 123})
+(def tina-kid1 #:schema {:eav/eid -1 :child -3})
+(def tina-kid2 #:schema {:eav/eid -1 :child -7})
+(def tina-boss #:schema {:eav/eid -1 :boss -6})
+(def bob      #:schema{:eav/eid -3   :name "Bob" :ssn 345 :parking-space 1})
+(def bob-foo  #:schema{:eav/eid 88   :ssn 345 :foo 7})
+(def bob-age  #:schema{:eav/eid 88   :age 77})
+(def arlan    #:schema{:eav/eid -4   :name "Arlan" :ssn 456 :id 888 :parking-space 2})
+(def mal      #:schema{:eav/eid -5   :name "Mal" :ssn 123 :id 888 :parking-space 9})
+(def may      #:schema{:eav/eid -6   :name "May" :ssn 234 :parking-space 10})
+(def franz    #:schema{:eav/eid -7   :name "Franz" :ssn 345 :parking-space 11})
 
 (defn upsert [store tx]
-  (store/+eavs store (eav/eav-seq tx)))
+  (store/+eavs store (store/eav-seq tx)))
 
 (deftest schema-tests
   (testing "no-enforcement violation"
@@ -136,7 +224,7 @@
       (is false)
       (catch #?(:clj Exception :cljs js/Error) e
              (is (= (-> e ex-data :no-schema)
-                    (eav/eav-seq [bar]))))))
+                    (store/eav-seq [bar]))))))
   (testing "simple value non-collision"
     (let [store (upsert store-enforce-schema [tina arlan])]
       (is true)))
@@ -150,7 +238,7 @@
   (testing "simple ident upsert"
     (let [store (upsert store-enforce-schema [tina tina-age])]
       (is (= (store/dump-entity-maps store))
-          [#:schema{:name "Tina", :ssn 123, :id 777, :parking-space 1, :age 73, :db/id 1}])))
+          [#:schema{:name "Tina", :ssn 123, :id 777, :parking-space 1, :age 73, :eav/eid 1}])))
   (testing "simple ident tx-overwrite (ignore)"
     (let [store (upsert store-enforce-schema [tina arlan mal])]
       (is true)))
@@ -187,16 +275,16 @@
                :schema/parking-space 1,
                :schema/foo 7,
                :schema/age 77,
-               :db/id 88}]))))
+               :eav/eid 88}]))))
   (testing "simple ref test"
     (let [store (upsert store-enforce-schema-overwrite
                        [tina tina-boss
                         arlan franz may])]
       (= (store/dump-entity-maps store)
-         [#:schema{:name "Tina", :ssn 123, :id 777, :parking-space 1, :boss 3, :db/id 2}
-          #:schema{:name "Arlan", :ssn 456, :id 888, :parking-space 2, :db/id 1}
-          #:schema{:name "Franz", :ssn 345, :parking-space 11, :db/id 4}
-          #:schema{:name "May", :ssn 234, :parking-space 10, :db/id 3}])))
+         [#:schema{:name "Tina", :ssn 123, :id 777, :parking-space 1, :boss 3, :eav/eid 2}
+          #:schema{:name "Arlan", :ssn 456, :id 888, :parking-space 2, :eav/eid 1}
+          #:schema{:name "Franz", :ssn 345, :parking-space 11, :eav/eid 4}
+          #:schema{:name "May", :ssn 234, :parking-space 10, :eav/eid 3}])))
   #_ ;TODO add card/many
   (testing "card/many ref test"
     (let [store (upsert store-enforce-schema-overwrite
