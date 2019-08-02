@@ -2,9 +2,13 @@
   (:require [clara-eav.eav :as eav]
             [clara-eav.store :as store]
             [clara-eav.test-helper :as th]
-    #?(:clj [clojure.test :refer [deftest testing is are use-fixtures]]
-       :cljs [cljs.test :refer-macros [deftest testing is are use-fixtures]]))
-  #?(:clj (:import (clojure.lang ExceptionInfo))))
+            [clojure.set :as set]
+            #?@(:clj [[clojure.spec.alpha :as s]
+                      [clojure.test :refer [deftest testing is are use-fixtures]]]
+                :cljs [[cljs.spec.alpha :as s]
+                       [cljs.test :refer-macros [deftest testing is are use-fixtures]]]))
+  #?(:clj (:import [clojure.lang ExceptionInfo]
+                   [java.util UUID])))
 
 (use-fixtures :once th/spec-fixture)
 
@@ -27,6 +31,92 @@
       :global
       10
       #uuid"8ed62381-c3ef-4174-ae8d-87789416bf65")))
+
+(def eav-record (eav/->EAV 1 :todo/done true))
+(def eav-vector [1 :todo/done true])
+
+(defn rand-uuid []
+  #?(:clj (UUID/randomUUID)
+          :cljs (random-uuid)))
+
+(deftest eav-spec-test
+  (testing "Are eav records."
+    (are [x y] (= x (s/valid? ::store/eav y))
+         true eav-record
+         true eav-vector
+         true (assoc eav-vector 0 (rand-uuid))
+         false (assoc eav-record :a "not-a-keyword")
+         false (assoc eav-vector 1 "not-a-keyword")
+         false (conj eav-vector "4th element")
+         false 1)))
+
+(def new-todo
+  {:todo/text "Buy milk"
+   :todo/done false})
+
+(def saved-todo
+  {:db/id 10
+   :todo/text "Buy eggs"
+   :todo/done true})
+
+(def saved-todo-eavs
+  #{(eav/->EAV 10 :todo/text "Buy eggs")
+    (eav/->EAV 10 :todo/done true)})
+
+(deftest entity->eav-seq-test
+  (testing "Entity map to EAVs with tempids"
+    (let [eav-seq (#'store/entity->eav-seq new-todo)
+          eids (map (comp second first) eav-seq)]
+      (is (= 2 (count eav-seq)))
+      (is (every? string? eids))
+      (is (apply = eids))))
+  (testing "Entity map to EAVs with eids"
+    (is (= saved-todo-eavs (set (#'store/entity->eav-seq saved-todo))))))
+
+(def list1 (list eav-record))
+(def list2 (list eav-record eav-record))
+
+(defn eid-of [eavs a' v']
+  (let [=av (fn [[e a v]]
+              (when (and (= a a') (= v v'))
+                e))
+        eid (some =av eavs)]
+    (if eid
+      eid
+      (throw (ex-info (str "EID for " a' " and " v' " not found") {})))))
+
+(deftest eav-seq-test
+  (testing "Converts EAVs and lists of EAVs to a eav sequence"
+    (are [x y] (= x (store/eav-seq y))
+      list1 eav-record
+      list1 eav-vector
+      list1 list1
+      list1 (list eav-vector)
+      list2 list2
+      list2 (list eav-vector eav-vector)
+      list2 (list eav-vector eav-record)
+      list2 (list eav-record eav-vector)))
+  (testing "Converts a new entity map to a eav sequence"
+    (let [eav-seq (store/eav-seq new-todo)
+          eid1 (eid-of eav-seq :todo/text "Buy milk")
+          eid2 (eid-of eav-seq :todo/done false)]
+      (is (= 2 (count eav-seq)))
+      (is (= eid1 eid2))
+      (is (string? eid1))
+      (is (string? eid2))))
+  (testing "Converts a saved entity map to a eav sequence"
+    (let [eav-seq (store/eav-seq saved-todo)]
+      (is (= saved-todo-eavs
+             (set eav-seq)))))
+  (testing "Converts a list of entity maps to a EAVs sequence"
+    (let [eav-seq (store/eav-seq (list new-todo saved-todo))
+          eid1 (eid-of eav-seq :todo/text "Buy milk")
+          eid2 (eid-of eav-seq :todo/done false)]
+      (is (= 4 (count eav-seq)))
+      (is (= eid1 eid2))
+      (is (string? eid1))
+      (is (string? eid2))
+      (is (set/subset? saved-todo-eavs (set eav-seq))))))
 
 (def store
   (merge store/default-store
@@ -123,7 +213,7 @@
 (def franz    #:schema{:db/id -7   :name "Franz" :ssn 345 :parking-space 11})
 
 (defn upsert [store tx]
-  (store/+eavs store (eav/eav-seq tx)))
+  (store/+eavs store (store/eav-seq tx)))
 
 (deftest schema-tests
   (testing "no-enforcement violation"
@@ -136,7 +226,7 @@
       (is false)
       (catch #?(:clj Exception :cljs js/Error) e
              (is (= (-> e ex-data :no-schema)
-                    (eav/eav-seq [bar]))))))
+                    (store/eav-seq [bar]))))))
   (testing "simple value non-collision"
     (let [store (upsert store-enforce-schema [tina arlan])]
       (is true)))

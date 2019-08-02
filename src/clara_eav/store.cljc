@@ -1,10 +1,15 @@
 (ns ^:no-doc clara-eav.store
   "A store keeps track of max-eid and maintains an EAV index."
-  (:require [clara-eav.eav :as eav]
-            [clojure.set :as set]
+  (:require [clojure.set :as set]
             [medley.core :as medley]
-    #?(:clj [clojure.spec.alpha :as s]
-       :cljs [cljs.spec.alpha :as s])))
+            #?@(:clj [[clara-eav.eav :as eav]
+                      [clojure.spec.alpha :as s]
+                      [clojure.core.match :as match]]
+                :cljs [[clara-eav.eav :as eav :refer [EAV]]
+                       [cljs.spec.alpha :as s]
+                       [cljs.core.match :as match :include-macros true]]))
+  #?(:clj (:import [clara_eav.eav EAV]
+                   [java.util UUID])))
 
 (def ^:dynamic *store*
   "Dynamic atom of store to be used in rule productions, similar to other
@@ -34,14 +39,30 @@
 (s/def ::schema
   (s/coll-of ::schema-entry))
 
-(s/def ::e
-  (s/or :string string?
-        :keyword keyword?
-        :uuid uuid?
-        :int int?))
+(s/def ::record (s/and #(instance? EAV %)
+                       (s/keys :req-un [::eav/e ::eav/a ::eav/v])))
+(s/def ::record-seq (s/coll-of ::record))
+(s/def ::vector (s/tuple ::eav/e ::eav/a ::eav/v))
+(s/def ::vector-seq (s/coll-of ::vector))
+
+(s/def ::eav (s/or ::record ::record
+                   ::vector ::vector))
+(s/def ::eav-seq (s/coll-of ::eav))
+(s/def :db/id ::eav/e)
+(s/def ::entity (s/merge (s/keys :opt [:db/id])
+                         (s/map-of keyword? any?)))
+(s/def ::entity-seq (s/coll-of ::entity))
+(s/def ::tx (s/or ::record ::record
+                  ::record-seq ::record-seq
+                  ::vector ::vector
+                  ::vector-seq ::vector-seq
+                  ::eav ::eav
+                  ::eav-seq ::eav-seq
+                  ::entity ::entity
+                  ::entity-seq ::entity-seq))
 
 (s/fdef tempid?
-  :args (s/cat :e ::e)
+  :args (s/cat :e ::eav/e)
   :ret boolean?)
 (defn- tempid?
   "True if `e` is a tempid. Strings and negative ints are tempids; keywords,
@@ -50,15 +71,21 @@
   (or (string? e)
       (neg-int? e)))
 
+(defn- new-eid
+  "Generates an uuid as a string to be used as a tempid for an entity map."
+  []
+  (str #?(:clj (UUID/randomUUID)
+          :cljs (random-uuid))))
+
 (s/def ::max-eid integer?)
 (s/def ::entity-map (s/map-of ::eav/a ::eav/v))
 (s/def ::eav-index (s/map-of ::eav/e ::entity-map))
-(s/def ::av-index (s/map-of (s/tuple ::eav/a ::eav/v) ::eav/eav))
+(s/def ::av-index (s/map-of (s/tuple ::eav/a ::eav/v) ::eav))
 (s/def ::ident-index ::av-index)
 (s/def ::value-index ::av-index)
 (s/def ::attrs (s/map-of ::eav/a ::schema-entry))
-(s/def ::insertables ::eav/record-seq)
-(s/def ::retractables ::eav/record-seq)
+(s/def ::insertables ::record-seq)
+(s/def ::retractables ::record-seq)
 (s/def ::tempids (s/map-of tempid? integer?))
 (s/def ::validation-mode #{:enforce :warn :ignore})
 (s/def ::schema-mode ::validation-mode)
@@ -106,13 +133,43 @@
 
 (s/fdef dump-entity-maps
   :args (s/cat :store ::store-tx)
-  :ret ::eav/entity-seq)
+  :ret ::entity-seq)
 (defn dump-entity-maps
   "Dump all entity maps from the given `store`."
   [{:keys [eav-index]}]
   (map (fn [[e avs]]
          (assoc avs :db/id e))
        eav-index))
+
+(s/fdef entity->eav-seq
+  :args (s/cat :entity ::entity)
+  :ret ::record-seq)
+(defn- entity->eav-seq
+  "Transforms an `entity` map into a list of EAVs. If the `entity` has a
+  `:db/id` (set to non-tempid) subsequent operations will have upsert
+  semantics. If not, a `:db/id` is generated as a tempid and subsequent
+  operations will have insert semantics."
+  [entity]
+  (let [e (:db/id entity (new-eid))
+        ->eav (fn [[k v]] (eav/->EAV e k v))
+        entity' (dissoc entity :db/id)]
+    (map ->eav entity')))
+
+(s/fdef eav-seq
+        :args (s/cat :tx ::tx)
+        :ret ::record-seq)
+(defn eav-seq
+  "Transforms transaction data `tx` into a sequence of eav records."
+  [tx]
+  (match/match (s/conform ::tx tx)
+    ::s/invalid (throw (ex-info "Invalid transaction data (tx)" {:tx tx}))
+    [::record eav-record] [eav-record]
+    [::record-seq record-seq] record-seq
+    [::vector eav-vector] [(apply eav/->EAV eav-vector)]
+    [::vector-seq vector-seq] (mapcat eav-seq vector-seq)
+    [::eav-seq record-or-vector-seq] (mapcat (comp eav-seq second) record-or-vector-seq)
+    [::entity entity] (entity->eav-seq entity)
+    [::entity-seq entity-seq] (mapcat entity->eav-seq entity-seq)))
 
 (s/fdef merges
   :args (s/cat :sets (s/coll-of set?) :s set?)
@@ -144,7 +201,7 @@
       sets)))
 
 (s/fdef collect-eids
-  :args (s/cat :eavs ::eav/record-seq)
+  :args (s/cat :eavs ::record-seq)
   :ret (s/map-of (s/tuple ::eav/a ::eav/v) (s/coll-of ::eav/e :kind set?)))
 (defn- collect-eids
   "Takes a list of eavs and returns a map of [a v] to a set of entity ids."
@@ -156,8 +213,8 @@
 
 (s/fdef match-db-eavs
   :args (s/cat :av-index ::av-index
-               :eavs ::eav/record-seq)
-  :ret (s/coll-of ::eav/eav))
+               :eavs ::record-seq)
+  :ret (s/coll-of ::eav))
 (defn- match-db-eavs
   [av-index eavs]
   (->> eavs
@@ -167,7 +224,7 @@
 
 (s/fdef merge-av-e-set
   :args (s/cat :av-index ::av-index
-               :eavs (s/nilable ::eav/record-seq))
+               :eavs (s/nilable ::record-seq))
   :ret (s/map-of (s/tuple ::eav/a ::eav/v)
                  (s/coll-of ::eav/e :kind set?)))
 (defn- merge-av-e-set
@@ -180,7 +237,7 @@
 
 (s/fdef av-index-merge
   :args (s/cat :idx ::av-index
-               :eavs (s/nilable ::eav/record-seq))
+               :eavs (s/nilable ::record-seq))
   :ret ::av-index)
 (defn- av-index-merge [idx eavs]
   (merge idx (zipmap (map (juxt :a :v) eavs)
@@ -188,9 +245,9 @@
 
 (s/fdef update-eav-positions
         :args (s/cat :position #{:e :v}
-                     :id-mapping (s/map-of ::e ::e)
-                     :eav ::eav/eav)
-        :ret ::eav/eav)
+                     :id-mapping (s/map-of ::eav/e ::eav/e)
+                     :eav ::eav)
+        :ret ::eav)
 (defn- update-eav-position
   "Substitute 'id-mapping in 'eav at :e or :v 'position"
   [position id-mapping eav]
@@ -198,7 +255,7 @@
 
 (s/fdef ref-eav?
         :args (s/cat :attrs ::attrs
-                     :eav ::eav/eav)
+                     :eav ::eav)
         :ret boolean?)
 (defn- ref-eav?
   [attrs {:keys [e a v]}]
@@ -209,9 +266,9 @@
 
 (s/fdef remap-ids
         :args (s/cat :attrs ::attrs
-                     :id-mapping (s/map-of ::e ::e)
-                     :eavs ::eav/record-seq)
-        :ret ::eav/record-seq)
+                     :id-mapping (s/map-of ::eav/e ::eav/e)
+                     :eavs ::record-seq)
+        :ret ::record-seq)
 (defn- remap-ids [attrs id-mapping eavs]
   (->> eavs
        (map #(update-eav-position :e id-mapping %))
@@ -221,8 +278,8 @@
 
 (s/fdef merge-unique-identities
   :args (s/cat :store ::store-tx
-               :tx-eavs ::eav/record-seq)
-  :ret ::eav/record-seq)
+               :tx-eavs ::record-seq)
+  :ret ::record-seq)
 (defn- merge-unique-identities
   [{:keys [attrs ident-index]} tx-eavs]
   (loop [eavs tx-eavs]
@@ -255,7 +312,7 @@
 
 (s/fdef resolve-uniqueness-attrs
   :args (s/cat :store ::store-tx
-               :tx-eavs ::eav/record-seq)
+               :tx-eavs ::record-seq)
   :ret ::store-tx)
 (defn- resolve-uniqueness-attrs
   "Resolve :unique/{identity,value} attributes in 'tx-eavs. For
@@ -304,7 +361,7 @@
 
 (s/fdef -eav
   :args (s/cat :store ::store-tx
-               :eav ::eav/record)
+               :eav ::record)
   :ret ::store-tx)
 (defn- -eav
   "Subtracts `eav` from `store` updating it's `:eav-index`. Returns the updated
@@ -319,7 +376,7 @@
 
 (s/fdef -eavs
   :args (s/cat :store ::store
-               :eavs ::eav/record-seq)
+               :eavs ::record-seq)
   :ret ::store-tx)
 (defn -eavs
   "Called in retractions to obtain retractables. Throws if tempids are present
@@ -332,7 +389,7 @@
 
 (s/fdef +eav
   :args (s/cat :store ::store-tx
-               :eav ::eav/record)
+               :eav ::record)
   :ret ::store-tx)
 (defn- +eav
   "Adds `eav` to `store` updating it's `:max-eid` and `:eav-index`. Returns the
@@ -367,7 +424,7 @@
 
 (s/fdef +eavs
   :args (s/cat :store ::store
-               :eavs ::eav/record-seq)
+               :eavs ::record-seq)
   :ret ::store-tx)
 (defn +eavs
   "Called in upserts to obtain insertables and retractables. Resolves tempids in
