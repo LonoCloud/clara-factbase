@@ -319,7 +319,7 @@
   :unique/value attributes do not upsert and can only collide if
   duplicated. Insert the upserted and validated :unique/* eavs to the
   appropriate indicies in the store."
-  [{:keys [max-eid attrs ident-index value-index] :as store} tx-eavs]
+  [{:keys [max-eid attrs eav-index ident-index value-index] :as store} tx-eavs]
   (let [new-eavs (merge-unique-identities store tx-eavs)
         tempids (set (for [eav new-eavs
                            pos [:e :v]
@@ -329,12 +329,15 @@
                        id))
         ;; Set up temp eids for mapping
         next-eid (inc max-eid)
-        new-max-eid (+ max-eid (count tempids))
+        existing-eids (set (concat (keys eav-index) (remove (comp tempid? :e) new-eavs)))
+        new-eids (take (count tempids)
+                       (remove existing-eids (map #(+ next-eid %) (range))))
+        new-max-eid (or (last new-eids) max-eid)
         ;; Create a map of tempid to new-eid
         tempid-newid-mapping (into {}
                                    (for [[new-eid tempid]
                                          (map list
-                                              (range next-eid (inc new-max-eid))
+                                              new-eids
                                               tempids)]
                                      [tempid new-eid]))
         ;; Apply tempid-newid-mapping to new-eavs using the existing
