@@ -175,7 +175,13 @@
     [:schema/boss  :cardinality/one :valueType/ref :unique :unique/identity]
     [:schema/ssn   :cardinality/one any? :unique :unique/identity]
     [:schema/id    :cardinality/one any? :unique :unique/identity]
-    [:schema/parking-space :cardinality/one any? :unique :unique/value]]))
+    [:schema/parking-space :cardinality/one any? :unique :unique/value]
+    [:schema/simple :cardinality/one any?]
+    [:schema/uniq-val :cardinality/one any? :unique :unique/value]
+    [:schema/uniq-ident :cardinality/one any? :unique :unique/identity]
+    [:schema/ref-one :cardinality/one :valueType/ref]
+    [:schema/ref-many :cardinality/many :valueType/ref]
+    ]))
 
 ;; Store with basic-schema
 (def store-basic-schema
@@ -213,6 +219,9 @@
 (defn upsert [store tx]
   (store/+eavs store (store/eav-seq tx)))
 
+(defn retract [store tx]
+  (store/-eavs store (store/eav-seq tx)))
+
 (deftest schema-tests
   (testing "no-enforcement violation"
     (upsert store-basic-schema [foo bar]))
@@ -237,8 +246,35 @@
                     {[:schema/parking-space 1] #{1 2}})))))
   (testing "simple ident upsert"
     (let [store (upsert store-enforce-schema [tina tina-age])]
-      (is (= (store/dump-entity-maps store))
-          [#:schema{:name "Tina", :ssn 123, :id 777, :parking-space 1, :age 73, :eav/eid 1}])))
+      (is (= (store/dump-entity-maps store)
+             [#:schema{:name "Tina", :ssn 123, :id 777, :parking-space 1, :age 73, :eav/eid 1}]))))
+  (testing "non-colliding-tempids"
+    (let [store (upsert store-enforce-schema [#:schema{:eav/eid 0 :simple 0}
+                                              #:schema{:eav/eid 1 :simple 1}
+                                              #:schema{:eav/eid 2 :simple 2}
+                                              #:schema{:eav/eid 3 :simple 3}
+                                              #:schema{:eav/eid 5 :simple 5}])
+          store (upsert store [#:schema{:eav/eid -1 :simple 4} ])]
+      (is (= (set (store/dump-entity-maps store))
+             (set [#:schema{:eav/eid 0 :simple 0}
+                   #:schema{:eav/eid 1 :simple 1}
+                   #:schema{:eav/eid 2 :simple 2}
+                   #:schema{:eav/eid 3 :simple 3}
+                   #:schema{:eav/eid 4 :simple 4}
+                   #:schema{:eav/eid 5 :simple 5}])))))
+  (testing "simple ident retract"
+    (let [store (upsert store-enforce-schema [#:schema{:eav/eid 1 :uniq-ident 4}])
+          store (retract store [#:schema{:eav/eid 1 :uniq-ident 4} ])]
+      (is (= (store/dump-entity-maps store)
+             []))))
+  (testing "simple ident retract 2"
+    (let [store (upsert store-enforce-schema [#:schema{:eav/eid 1 :uniq-ident 1
+                                                                :simple 1}])
+          store (retract store [#:schema{:eav/eid 1 :uniq-ident 1} ])
+          store (upsert store [#:schema{:eav/eid -1 :uniq-ident 1} ])]
+      (is (= (store/dump-entity-maps store)
+             [#:schema{:eav/eid 1 :simple 1}
+              #:schema{:eav/eid 2 :uniq-ident 1} ]))))
   (testing "simple ident tx-overwrite (ignore)"
     (let [store (upsert store-enforce-schema [tina arlan mal])]
       (is true)))

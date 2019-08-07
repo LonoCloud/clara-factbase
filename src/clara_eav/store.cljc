@@ -366,15 +366,19 @@
                :eav ::record)
   :ret ::store-tx)
 (defn- -eav
-  "Subtracts `eav` from `store` updating it's `:eav-index`. Returns the updated
+  "Subtracts `eav` from `store` updating the indicies. Returns the updated
   `store` including `:retractables` eavs."
   [store eav]
-  (let [{:keys [e a]} eav]
+  (let [{:keys [e a v]} eav]
     (if (tempid? e)
       (throw (ex-info "Tempids not allowed in retractions" {:e e}))
       (-> store
           (update :retractables conj eav)
-          (medley/dissoc-in [:eav-index e a])))))
+          ;; :eav-index is a two-level index of maps
+          (update :eav-index medley/dissoc-in [e a])
+          ;; These indicies have [a v] tuple keys
+          (update :ident-index dissoc [a v])
+          (update :value-index dissoc [a v])))))
 
 (s/fdef -eavs
   :args (s/cat :store ::store
