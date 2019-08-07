@@ -68,6 +68,23 @@ Interations with :unique/identity:
 - if no substituions done, assign new eids to upsert map and
   substitute across all E and V position tmpids... done
 
+The full :db/ref interactions are:
+
+- :cardinality/many
+  - :type is not :db/ref
+  - :type is :db/ref
+- :cardinality/one
+  - not :unique
+    - :type is not :db/ref
+    - :type is :db/ref
+  - :unique/identity
+    - :type is not :db/ref
+    - :type is :db/ref
+  - :unique/value
+    - :type is not :db/ref
+    - :type is :db/ref
+
+
 ### `::unique`
 #### `::unique/identity`
 
@@ -79,3 +96,4 @@ Transaction error if more than one attr/val is being attempted to be inserted.
 ### `::isComponent`
 Used in pull.
 Used in retract.
+
