@@ -177,13 +177,16 @@
     [:schema/boss  :cardinality/one :valueType/ref :unique :unique/identity]
     [:schema/ssn   :cardinality/one any? :unique :unique/identity]
     [:schema/id    :cardinality/one any? :unique :unique/identity]
-    [:schema/parking-space :cardinality/one any? :unique :unique/value]
-    [:schema/simple :cardinality/one any?]
+    [:schema/parking-space :cardinality/one any? :unique :unique/value]]))
+
+(def standard-schema
+  (gen-schema
+   [[:schema/any :cardinality/one any?]
+    [:schema/any-many :cardinality/many any?]
     [:schema/uniq-val :cardinality/one any? :unique :unique/value]
     [:schema/uniq-ident :cardinality/one any? :unique :unique/identity]
     [:schema/ref-one :cardinality/one :valueType/ref]
-    [:schema/ref-many :cardinality/many :valueType/ref]
-    ]))
+    [:schema/ref-many :cardinality/many :valueType/ref]]))
 
 ;; Store with basic-schema
 (def store-basic-schema
@@ -202,6 +205,12 @@
    {:schema-mode :enforce
     :tx-overwrite-mode :enforce
     :schema full-schema }))
+
+(def store-standard-enforce
+  (store/init
+   {:schema-mode :enforce
+    :tx-overwrite-mode :enforce
+    :schema standard-schema }))
 
 (def foo      #:schema{:db/id 1    :foo 1})
 (def bar      #:schema{:db/id 2    :bar 2})
@@ -251,31 +260,32 @@
       (is (= (store/dump-entity-maps store)
              [#:schema{:name "Tina", :ssn 123, :id 777, :parking-space 1, :age 73, :db/id 1}]))))
   (testing "non-colliding-tempids"
-    (let [store (upsert store-enforce-schema [#:schema{:db/id 0 :simple 0}
-                                              #:schema{:db/id 1 :simple 1}
-                                              #:schema{:db/id 2 :simple 2}
-                                              #:schema{:db/id 3 :simple 3}
-                                              #:schema{:db/id 5 :simple 5}])
-          store (upsert store [#:schema{:db/id -1 :simple 4} ])]
+    (let [store (upsert store-standard-enforce [#:schema{:db/id 0 :any 0}
+                                                #:schema{:db/id 1 :any 1}
+                                                #:schema{:db/id 2 :any 2}
+                                                #:schema{:db/id 3 :any 3}
+                                                #:schema{:db/id 5 :any 5}])
+          store (upsert store [#:schema{:db/id -1 :any 4} ])]
       (is (= (set (store/dump-entity-maps store))
-             (set [#:schema{:db/id 0 :simple 0}
-                   #:schema{:db/id 1 :simple 1}
-                   #:schema{:db/id 2 :simple 2}
-                   #:schema{:db/id 3 :simple 3}
-                   #:schema{:db/id 4 :simple 4}
-                   #:schema{:db/id 5 :simple 5}])))))
+             (set [#:schema{:db/id 0 :any 0}
+                   #:schema{:db/id 1 :any 1}
+                   #:schema{:db/id 2 :any 2}
+                   #:schema{:db/id 3 :any 3}
+                   #:schema{:db/id 4 :any 4}
+                   #:schema{:db/id 5 :any 5}])))))
   (testing "simple ident retract"
-    (let [store (upsert store-enforce-schema [#:schema{:db/id 1 :uniq-ident 4}])
+    (let [store (upsert store-standard-enforce [#:schema{:db/id 1 :uniq-ident 4}])
           store (retract store [#:schema{:db/id 1 :uniq-ident 4} ])]
       (is (= (store/dump-entity-maps store)
              []))))
   (testing "simple ident retract 2"
-    (let [store (upsert store-enforce-schema [#:schema{:db/id 1 :uniq-ident 1
-                                                                :simple 1}])
+    (let [store (upsert store-standard-enforce [#:schema{:db/id 1
+                                                         :uniq-ident 1
+                                                         :any 1}])
           store (retract store [#:schema{:db/id 1 :uniq-ident 1} ])
           store (upsert store [#:schema{:db/id -1 :uniq-ident 1} ])]
       (is (= (store/dump-entity-maps store)
-             [#:schema{:db/id 1 :simple 1}
+             [#:schema{:db/id 1 :any 1}
               #:schema{:db/id 2 :uniq-ident 1} ]))))
   (testing "simple ident tx-overwrite (ignore)"
     (let [store (upsert store-enforce-schema [tina arlan mal])]
@@ -323,11 +333,10 @@
           #:schema{:name "Arlan", :ssn 456, :id 888, :parking-space 2, :db/id 1}
           #:schema{:name "Franz", :ssn 345, :parking-space 11, :db/id 4}
           #:schema{:name "May", :ssn 234, :parking-space 10, :db/id 3}])))
-  #_ ;TODO add card/many
-  (testing "card/many ref test"
-    (let [store (upsert store-enforce-schema-overwrite
-                       [tina tina-kid1 tina-kid2
-                        arlan franz may])]
-      (prn :ref2 (store/dump-entity-maps store))))
-  (testing ""
-    (is true)))
+  (testing "simple card/many test"
+    (let [store (upsert store-standard-enforce [#:schema{:db/id 1 :any-many [1]}])
+          store (upsert store [#:schema{:db/id 1 :any-many [2]}])]
+      (is (= (store/dump-entity-maps store)
+             [#:schema{:db/id 1 :any-many #{1 2}}]))))
+  ;; TODO card/many ref test
+ )

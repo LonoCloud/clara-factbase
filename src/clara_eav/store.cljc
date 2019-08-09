@@ -158,9 +158,12 @@
   operations will have insert semantics."
   [attrs entity]
   (let [e (:db/id entity (new-eid))
-        ->eav (fn [[k v]] (eav/->EAV e k v))
+        ->eav (fn [[k v]] (if (= :cardinality/many (-> k attrs :cardinality))
+                               (for [v' v]
+                                 (eav/->EAV e k v'))
+                               [(eav/->EAV e k v)]))
         entity' (dissoc entity :db/id)]
-    (map ->eav entity')))
+    (mapcat ->eav entity')))
 
 (s/fdef eav-seq
         :args (s/alt :no-schema (s/cat :tx ::tx)
@@ -382,13 +385,20 @@
 (defn- -eav
   "Subtracts `eav` from `store` updating the indicies. Returns the updated
   `store` including `:retractables` eavs."
-  [store eav]
+  [{:keys [attrs] :as store} eav]
   (let [{:keys [e a v]} eav
+        cardinality (get-in attrs [a :cardinality] :cardinality/one)
+        update-fn ({:cardinality/one  #(medley/dissoc-in % [e a])
+                    :cardinality/many #(let [v' (disj % v)]
+                                         (if (empty? v')
+                                           (dissoc % a)
+                                           (assoc % a v')))}
+                   cardinality)]
     (if (tempid? e)
       (throw (ex-info "Tempids not allowed in retractions" {:e e}))
       (-> store
           (update :retractables conj eav)
-          (medley/dissoc-in [:eav-index e a])
+          (update :eav-index update-fn)
           (update :ident-index dissoc [a v])
           (update :value-index dissoc [a v])))))
 
@@ -410,35 +420,35 @@
                :eav ::record)
   :ret ::store-tx)
 (defn- +eav
-  "Adds `eav` to `store` updating it's `:max-eid` and `:eav-index`. Returns the
-  updated `store` including `:insertables` eavs, `:retractables` eavs and
-  resolved `:tempids` map of {tempid -> eid}."
-  [store eav]
-  (let [{:keys [tempids max-eid eav-index options]} store
-        {:keys [e a v]} eav
-        transient? (= :eav/transient a)]
-    (if (tempid? e)
-      (if-some [eid (get tempids e)]
-        (-> store
-            (update :insertables conj (assoc eav :e eid))
-            (cond-> (not transient?) (assoc-in [:eav-index eid a] v)))
-        (let [new-eid (inc max-eid)]
-          (-> store
-              (update :insertables conj (assoc eav :e new-eid))
-              (assoc-in [:tempids e] new-eid)
-              (assoc :max-eid new-eid)
-              (cond-> (not transient?) (assoc-in [:eav-index new-eid a] v)))))
-      (if transient?
-        (update store :insertables conj eav)
-        (if-some [v' (get-in eav-index [e a])]
-          (cond-> store
-                  (not= v v') (-> (update :insertables conj eav)
-                                  (update :retractables conj (assoc eav :v v'))
-                                  (assoc-in [:eav-index e a] v)))
-          (-> store
-              (update :insertables conj eav)
-              (assoc-in [:eav-index e a] v)))))))
+  "Adds `eav` to `store` updating `:eav-index`. Returns the
+  updated `store` including `:insertables` eavs, `:retractables` eavs."
+  [{:keys [eav-index attrs] :as store} {:keys [e a v] :as eav}]
+  (let [cardinality (get-in attrs [a :cardinality] :cardinality/one)
+        update-fn ({:cardinality/one  (fn [old new] new)
+                    :cardinality/many (fnil conj #{})}
+                   cardinality)
+        present?  ({:cardinality/one  (fn [v idx-v] (not= v idx-v))
+                    :cardinality/many (fn [v idx-v] (not (contains? idx-v v)))}
+                   cardinality)]
+    (if (= :eav/transient a)
+      (update store :insertables conj eav)
+      (let [idx-v (get-in eav-index [e a] ::not-present)]
+        (cond
+          (= ::not-present idx-v) ;; EAV not in the database
+          (as-> store store
+            (update store :insertables conj eav)
+            (update-in store [:eav-index e a] update-fn v))
 
+          (present? v idx-v) ;; In the database, but different
+          (as-> store store
+            (update store :insertables conj eav)
+            (if (= :cardinality/one cardinality)
+              (update store :retractables conj (assoc eav :v idx-v))
+              store)
+            (update-in store [:eav-index e a] update-fn v))
+
+          :default ;; Do nothing if same as what's in the database
+          store)))))
 
 (s/fdef +eavs
   :args (s/cat :store ::store
