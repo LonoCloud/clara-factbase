@@ -69,8 +69,9 @@
 (defn retract
   "Like Clara-Rules retract; tx is transaction data with no tempids."
   [session tx]
-  (let [{:keys [retractables]
-         :as store} (store/-eavs (:store session) (store/eav-seq tx))]
+  (let [{{:keys [attrs] :as store} :store} session
+        {:keys [retractables]
+         :as store} (store/-eavs store (store/eav-seq attrs tx))]
     (assoc (engine/retract session retractables)
       :store (store/state store))))
 
@@ -79,8 +80,9 @@
 (defn retract!
   "Like Clara-Rules retract!; tx is transaction data with no tempids."
   [tx]
-  (let [{:keys [retractables]
-         :as store} (store/-eavs @store/*store* (store/eav-seq tx))]
+  (let [{:keys [attrs] :as store} @store/*store*
+        {:keys [retractables]
+         :as store} (store/-eavs store (store/eav-seq attrs tx))]
     (when (seq retractables)
       (reset! store/*store* (store/state store))
       (engine/rhs-retract-facts! retractables))))
@@ -96,8 +98,9 @@
   have the same eid and attribute but with a new value. The returned session has
   an extra `:tempids` key with the resolved tempids map {tempid -> eid}."
   [session tx]
-  (let [{:keys [insertables retractables tempids]
-         :as store} (store/+eavs (:store session) (store/eav-seq tx))]
+  (let [{{:keys [attrs] :as store} :store} session
+        {:keys [insertables retractables tempids]
+         :as store} (store/+eavs store (store/eav-seq attrs tx))]
     (cond-> session
             (seq retractables) (engine/retract retractables)
             (seq insertables) (engine/insert insertables)
@@ -109,8 +112,9 @@
                :unconditional boolean?))
 (defn- upsert!*
   [tx unconditional]
-  (let [{:keys [insertables retractables]
-         :as store} (store/+eavs @store/*store* (store/eav-seq tx))]
+  (let [{:keys [attrs] :as store} @store/*store*
+        {:keys [insertables retractables]
+         :as store} (store/+eavs store (store/eav-seq attrs tx))]
     (when (seq retractables)
       (engine/rhs-retract-facts! retractables))
     (when (seq insertables)

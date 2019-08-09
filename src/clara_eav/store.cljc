@@ -37,7 +37,8 @@
     #(or (not= :cardinality/many (:cardinality %))
          (not (:unique %)))))
 (s/def ::schema
-  (s/coll-of ::schema-entry))
+  ;; :kind clause is a work-around for https://clojure.atlassian.net/browse/CLJ-1975
+  (s/coll-of ::schema-entry :kind #(not (record? %))))
 
 (s/def ::record (s/and #(instance? EAV %)
                        (s/keys :req-un [::eav/e ::eav/a ::eav/v])))
@@ -109,6 +110,13 @@
    :ident-index {}
    :value-index {}})
 
+(s/fdef schema->attrs
+        :args (s/cat :schema ::schema)
+        :ret ::attrs)
+(defn schema->attrs
+  [schema]
+  (into {} (map (juxt :ident identity)) schema))
+
 (s/fdef init
   :args (s/cat :options ::options)
   :ret ::store)
@@ -118,8 +126,7 @@
   (let [{:keys [schema] :as merged-options} (merge default-options options)
         {idents :unique/identity values :unique/value} (group-by :unique schema)]
     (merge default-store {:options merged-options
-                          :attrs (into {} (map (juxt :ident identity)) schema)})))
-
+                          :attrs (schema->attrs schema)})))
 
 (s/fdef state
   :args (s/cat :store ::store-tx)
@@ -141,34 +148,40 @@
        eav-index))
 
 (s/fdef entity->eav-seq
-  :args (s/cat :entity ::entity)
+  :args (s/cat :attrs ::attrs :entity ::entity)
   :ret ::record-seq)
 (defn- entity->eav-seq
   "Transforms an `entity` map into a list of EAVs. If the `entity` has a
   `:eav/eid` (set to non-tempid) subsequent operations will have upsert
   semantics. If not, a `:eav/eid` is generated as a tempid and subsequent
   operations will have insert semantics."
-  [entity]
-  (let [e (:eav/eid entity (tempid))
+  [attrs entity]
+  (let [e (:eav/eid entity (new-eid))
         ->eav (fn [[k v]] (eav/->EAV e k v))
         entity' (dissoc entity :eav/eid)]
     (map ->eav entity')))
 
 (s/fdef eav-seq
-        :args (s/cat :tx ::tx)
+        :args (s/alt :no-schema (s/cat :tx ::tx)
+                     :attrs (s/cat :attrs ::attrs :tx ::tx)
+                     :schema (s/cat :schema ::schema :tx ::tx))
         :ret ::record-seq)
 (defn eav-seq
   "Transforms transaction data `tx` into a sequence of eav records."
-  [tx]
-  (match/match (s/conform ::tx tx)
-    ::s/invalid (throw (ex-info "Invalid transaction data (tx)" {:tx tx}))
-    [::record eav-record] [eav-record]
-    [::record-seq record-seq] record-seq
-    [::vector eav-vector] [(apply eav/->EAV eav-vector)]
-    [::vector-seq vector-seq] (mapcat eav-seq vector-seq)
-    [::eav-seq record-or-vector-seq] (mapcat (comp eav-seq second) record-or-vector-seq)
-    [::entity entity] (entity->eav-seq entity)
-    [::entity-seq entity-seq] (mapcat entity->eav-seq entity-seq)))
+  ([tx] (eav-seq {} tx))
+  ([schema-or-attrs tx]
+   (let [attrs (if (map? schema-or-attrs)
+                 schema-or-attrs
+                 (schema->attrs schema-or-attrs))]
+     (match/match (s/conform ::tx tx)
+                  ::s/invalid (throw (ex-info "Invalid transaction data (tx)" {:tx tx}))
+                  [::record eav-record] [eav-record]
+                  [::record-seq record-seq] record-seq
+                  [::vector eav-vector] [(apply eav/->EAV eav-vector)]
+                  [::vector-seq vector-seq] (mapcat #(eav-seq attrs %) vector-seq)
+                  [::eav-seq record-or-vector-seq] (mapcat #(eav-seq attrs (second %)) record-or-vector-seq)
+                  [::entity entity] (entity->eav-seq attrs entity)
+                  [::entity-seq entity-seq] (mapcat #(entity->eav-seq attrs %) entity-seq)))))
 
 (s/fdef merges
   :args (s/cat :sets (s/coll-of set?) :s set?)

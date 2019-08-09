@@ -63,13 +63,13 @@
 
 (deftest entity->eav-seq-test
   (testing "Entity map to EAVs with tempids"
-    (let [eav-seq (#'store/entity->eav-seq new-todo)
+    (let [eav-seq (#'store/entity->eav-seq {} new-todo)
           eids (map (comp second first) eav-seq)]
       (is (= 2 (count eav-seq)))
       (is (every? string? eids))
       (is (apply = eids))))
   (testing "Entity map to EAVs with eids"
-    (is (= saved-todo-eavs (set (#'store/entity->eav-seq saved-todo))))))
+    (is (= saved-todo-eavs (set (#'store/entity->eav-seq {} saved-todo))))))
 
 (def list1 (list eav-record))
 (def list2 (list eav-record eav-record))
@@ -217,10 +217,10 @@
 (def franz    #:schema{:eav/eid -7   :name "Franz" :ssn 345 :parking-space 11})
 
 (defn upsert [store tx]
-  (store/+eavs store (store/eav-seq tx)))
+  (store/+eavs store (store/eav-seq (:attrs store) tx)))
 
 (defn retract [store tx]
-  (store/-eavs store (store/eav-seq tx)))
+  (store/-eavs store (store/eav-seq (:attrs store) tx)))
 
 (deftest schema-tests
   (testing "no-enforcement violation"
@@ -233,7 +233,7 @@
       (is false)
       (catch #?(:clj Exception :cljs js/Error) e
              (is (= (-> e ex-data :no-schema)
-                    (store/eav-seq [bar]))))))
+                    (store/eav-seq (:attrs store-enforce-schema) [bar]))))))
   (testing "simple value non-collision"
     (let [store (upsert store-enforce-schema [tina arlan])]
       (is true)))
