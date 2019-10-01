@@ -340,3 +340,7 @@
              [#:schema{:db/id 1 :any-many #{1 2}}]))))
   ;; TODO card/many ref test
  )
+
+(deftest generative-tests
+  ()
+  )

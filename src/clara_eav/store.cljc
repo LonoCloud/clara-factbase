@@ -50,6 +50,10 @@
                    ::vector ::vector))
 (s/def ::eav-seq (s/coll-of ::eav))
 (s/def :db/id ::eav/e)
+(s/def :db/foo #{"foo" "bar"})
+#_(s/def :db/foo ::eav/e)
+#_(s/def ::bar (s/tuple ::eav/e :db/foo))
+(s/def ::bar (s/tuple :db/id :db/foo))
 (s/def ::entity (s/merge (s/keys :opt [:db/id])
                          (s/map-of keyword? any?)))
 (s/def ::entity-seq (s/coll-of ::entity))
@@ -439,6 +443,7 @@
             (update store :insertables conj eav)
             (update-in store [:eav-index e a] update-fn v))
 
+          ;; TODO need to consider difference between in db and in tx
           (present? v idx-v) ;; In the database, but different
           (as-> store store
             (update store :insertables conj eav)
