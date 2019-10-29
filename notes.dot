@@ -1,0 +1,64 @@
+digraph G {
+  subgraph functions {
+    label = "functions";
+    "resolve-uniqueness-attrs";
+    "<filter...>"
+    "merge-av-e-set(1)"
+    "<concat...>"
+    "unify-sets"
+    "<categorize...>"
+    "inc"
+    "<+...count...>"
+    "<into {} for...>"
+    "<map...update...>"
+    "<group-by :unique...>"
+    "merge-av-e-set(2)"
+    "<filter...count...>"
+    "av-index-merge(1)"
+    "av-index-merge(2)"
+    "THROW :uniqe/ident"
+    "THROW :uniqe/value"
+  }
+  subgraph values {
+    label = "values";
+    node [shape=box, style=filled];
+    "store" -> {"max-eid" "attrs" "ident-index" "value-index"};
+    "tx-eavs";
+    "tx-ident-eavs";
+    "ident-av-e-set";
+    "all-eid-sets";
+		"unified-eids";
+		"zero-eids"
+    "one-eid"
+    "many-eids-violations"
+    "next-eid"
+    "new-max-eid"
+    "tempid-newid-mapping"
+    "new-eavs"
+    "new-ident-eavs"
+    "new-value-eavs"
+    "value-av-e-set"
+    "value-violations"
+    "new-ident-index"
+    "new-value-index"
+    "<RETURN_VALUE>"
+  }
+  "resolve-uniqueness-attrs" -> {"store" "tx-eavs"}
+  {"attrs" "tx-eavs"} -> "<filter...>" -> "tx-ident-eavs"
+	{"ident-index" "tx-ident-eavs"} -> "merge-av-e-set(1)" -> "ident-av-e-set"
+  {"ident-av-e-set" "tx-eavs"} -> "<concat...>" -> "all-eid-sets"
+  "all-eid-sets" -> "unify-sets" -> "unified-eids"
+  "unified-eids" -> "<categorize...>" -> {"zero-eids" "one-eid" "many-eids-violations"}
+  "max-eid" -> "inc" -> "next-eid"
+  {"max-eid" "zero-eids"} -> "<+...count...>" -> "new-max-eid"
+  {"next-eid" "new-max-eid" "zero-eids"} -> "<into {} for...>" -> "tempid-newid-mapping"
+  {"tempid-newid-mapping" "tx-eavs"} -> "<map...update...>" -> "new-eavs"
+  {"attrs" "new-eavs"} -> "<group-by :unique...>" -> {"new-ident-eavs" "new-value-eavs"}
+  {"value-index" "new-value-eavs"} -> "merge-av-e-set(2)" -> "value-av-e-set"
+  "value-av-e-set" -> "<filter...count...>" -> "value-violations"
+  {"ident-index" "new-ident-eavs"} -> "av-index-merge(1)" -> "new-ident-index"
+  {"value-index" "new-value-eavs"} -> "av-index-merge(2)" -> "new-value-index"
+  {"many-eids-violations" "ident-av-e-set" "unified-eids"} -> "THROW :uniqe/ident"
+  {"value-violations" "value-av-e-set"} -> "THROW :uniqe/value"
+  {"store" "new-max-eid" "new-ident-index" "new-value-index" "new-eavs"} -> "<RETURN_VALUE>"
+}
