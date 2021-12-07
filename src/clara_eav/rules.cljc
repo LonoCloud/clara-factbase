@@ -71,9 +71,9 @@
   [session tx]
   (let [{{:keys [attrs] :as store} :store} session
         {:keys [retractables]
-         :as store} (store/-eavs store (store/eav-seq attrs tx))]
+         :as store'} (store/-eavs store (store/eav-seq attrs tx))]
     (assoc (engine/retract session retractables)
-      :store (store/state store))))
+      :store (store/state store'))))
 
 (s/fdef retract!
   :args (s/cat :tx ::store/tx))
