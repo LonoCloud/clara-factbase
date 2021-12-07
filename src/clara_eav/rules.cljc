@@ -101,28 +101,28 @@
   (let [{{:keys [attrs] :as store} :store} session
         {:keys [insertables retractables tempids]
          :as store} (store/+eavs store (store/eav-seq attrs tx))
-         ;retractables' (remove (set insertables) retractables)
-         ;insertables' (remove (set retractables) insertables)
-         cmp (juxt :e :a :v)
-         [insertables' retractables']
-         , (loop [ins' []
-                  ret' []
-                  ins (sort-by cmp insertables)
-                  ret (sort-by cmp retractables)]
-             (if (or (empty? ins) (empty? ret))
-               [(into ins' ins) (into ret' ret)]
-               (let [[I & INS] ins
-                     [R & RET] ret
-                     res (compare (cmp I) (cmp R))]
-                 (cond
-                   (neg? res)  (recur (conj ins' I) ret' INS ret)
-                   (zero? res) (recur ins' ret' INS RET)
-                   (pos? res)  (recur ins' (conj ret' R) ins RET)))))]
+        ;;retractables' (remove (set insertables) retractables)
+        ;;insertables' (remove (set retractables) insertables)
+        cmp (juxt :e :a :v)
+        [insertables' retractables']
+        , (loop [ins' []
+                 ret' []
+                 ins (sort-by cmp insertables)
+                 ret (sort-by cmp retractables)]
+            (if (or (empty? ins) (empty? ret))
+              [(into ins' ins) (into ret' ret)]
+              (let [[I & INS] ins
+                    [R & RET] ret
+                    res (compare (cmp I) (cmp R))]
+                (cond
+                  (neg? res)  (recur (conj ins' I) ret' INS ret)
+                  (zero? res) (recur ins' ret' INS RET)
+                  (pos? res)  (recur ins' (conj ret' R) ins RET)))))]
     (cond-> session
-            (seq retractables') (engine/retract retractables')
-            (seq insertables') (engine/insert insertables')
-            true (assoc :store (store/state store)
-                        :tempids tempids))))
+      (seq retractables') (engine/retract retractables')
+      (seq insertables') (engine/insert insertables')
+      true (assoc :store (store/state store)
+                  :tempids tempids))))
 
 (s/fdef upsert!*
   :args (s/cat :tx ::store/tx
