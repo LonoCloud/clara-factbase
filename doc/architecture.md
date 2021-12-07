@@ -10,6 +10,18 @@ clara-eav.rules
   clara-eav.store
     clara-eav.eav
   clara-eav.dsl
+  
+## High level
+
+- session wrapper contains:
+  - clara session
+  - EAV store sync'd with session
+  - metadata options
+    - schema
+    - schema-mode (ignore/warn/enforce) - are attributes in the schema
+    - typecheck-mode (ignore/warn/enforce) - do values match spec in schema for attr
+    - tx-overwrite-mode (ignore/warn/enforce) - can you overwrite card-one EAVs without retracting first
+    - no-retract-mode (ignore/warn/enforce) - can you ever retract or modify any EAVs (UNIMPLEMENTED)
 
 ## Schema
 
