@@ -50,6 +50,8 @@
                    ::vector ::vector))
 (s/def ::eav-seq (s/coll-of ::eav))
 (s/def :eav/eid ::eav/e)
+(s/def ::entity-card-many (s/or :seq sequential?
+                                :set set?))
 (s/def ::entity (s/merge (s/keys :opt [:eav/eid])
                          (s/map-of keyword? any?)))
 (s/def ::entity-seq (s/coll-of ::entity))
@@ -157,11 +159,14 @@
   operations will have insert semantics."
   [attrs entity]
   (let [e (:eav/eid entity (tempid))
-        ->eav (fn [[k v]] (if (= :cardinality/many (-> k attrs :cardinality))
-                               (for [v' v]
-                                 (eav/->EAV e k v'))
-                               [(eav/->EAV e k v)]))
+        ->eav (fn [[a v]] (if (= :cardinality/many (-> a attrs :cardinality))
+                              (do
+                                (s/assert ::entity-card-many v)
+                                (for [v' v]
+                                  (eav/->EAV e a v')))
+                              [(eav/->EAV e a v)]))
         entity' (dissoc entity :eav/eid)]
+    ;; TODO: recursively handle :db.type/ref nested maps
     (mapcat ->eav entity')))
 
 (s/fdef eav-seq

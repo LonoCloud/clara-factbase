@@ -104,6 +104,7 @@
         ;;retractables' (remove (set insertables) retractables)
         ;;insertables' (remove (set retractables) insertables)
         cmp (juxt :e :a :v)
+        _ (prn :insertables insertables)
         [insertables' retractables']
         , (loop [ins' []
                  ret' []
