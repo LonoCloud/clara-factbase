@@ -434,20 +434,19 @@
         update-fn ({:cardinality/one  (fn [old new] new)
                     :cardinality/many (fnil conj #{})}
                    cardinality)
-        present?  ({:cardinality/one  (fn [v idx-v] (not= v idx-v))
-                    :cardinality/many (fn [v idx-v] (not (contains? idx-v v)))}
+        differs?  ({:cardinality/one  (fn [idx-v v] (not= v idx-v))
+                    :cardinality/many (fn [idx-v v] (not (contains? idx-v v)))}
                    cardinality)]
     (if (= :eav/transient a)
       (update store :insertables conj eav)
       (let [idx-v (get-in eav-index [e a] ::not-present)]
         (cond
-          (= ::not-present idx-v) ;; EAV not in the database
+          (= idx-v ::not-present) ;; EAV not in the eav-index
           (as-> store store
             (update store :insertables conj eav)
             (update-in store [:eav-index e a] update-fn v))
 
-          ;; TODO need to consider difference between in db and in tx
-          (present? v idx-v) ;; In the database, but different
+          (differs? idx-v v) ;; In the eav-index, but different
           (as-> store store
             (update store :insertables conj eav)
             (if (= :cardinality/one cardinality)
@@ -455,7 +454,7 @@
               store)
             (update-in store [:eav-index e a] update-fn v))
 
-          :default ;; Do nothing if same as what's in the database
+          :default ;; Do nothing if same as what's in the eav-index
           store)))))
 
 (s/fdef +eavs
