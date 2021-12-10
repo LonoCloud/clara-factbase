@@ -392,11 +392,14 @@
   [{:keys [attrs] :as store} eav]
   (let [{:keys [e a v]} eav
         cardinality (get-in attrs [a :cardinality] :cardinality/one)
-        update-fn ({:cardinality/one  #(medley/dissoc-in % [e a])
-                    :cardinality/many #(let [v' (disj % v)]
-                                         (if (empty? v')
-                                           (dissoc % a)
-                                           (assoc % a v')))}
+        update-fn ({:cardinality/one  #(if (= v (get-in % [e a]))
+                                         (medley/dissoc-in % [e a])
+                                         %)
+                    :cardinality/many #(let [v-set (get-in % [e a] #{})
+                                             v-set' (disj v-set v)]
+                                         (if (empty? v-set')
+                                           (medley/dissoc-in % [e a])
+                                           (assoc-in % [e a] v-set')))}
                    cardinality)]
     (if (tempid? e)
       (throw (ex-info "Tempids not allowed in retractions" {:e e}))
