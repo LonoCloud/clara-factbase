@@ -10,10 +10,13 @@
                  [com.cerner/clara-rules "0.21.0"]
 
                  ;; clara-eav.main generative testing deps
-                 [expound "0.7.1"]
+                 [expound "0.8.10"]
                  [differ "0.3.3"]
-                 [org.clojure/test.check "0.10.0-alpha3"]
-                 [datascript "0.18.4"]]
+                 [zprint "1.2.0"]
+                 [org.clojure/test.check "1.1.1"]
+                 [com.datomic/dev-local "1.0.238"]
+                 [datascript "0.18.4"]
+                 [com.datomic/datomic-free "0.9.5697"]]
   :plugins [[lein-cljsbuild "1.1.8" :exclusions [org.clojure/clojure]]
             [lein-cloverage "1.2.1"]]
   :codox {:metadata {:doc/format :markdown}}
@@ -23,7 +26,7 @@
    "test-all" ["do" ["test"] ["test-cljs"]]
    "gentest-datomic" ["with-profile" "datomic" "run"]}
 
-  :main clara-eav.main
+  ;;:main clara-eav.main
 
   :profiles
   {:provided {:dependencies [[org.clojure/clojurescript "1.10.520"]]}

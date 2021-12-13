@@ -11,9 +11,10 @@
 
             [expound.alpha :as expound] ;; needed by test-helper
             [clara-eav.test-helper :as th]
-            [datascript.core :as d]
+            [datascript.core :as ds]
+            [datomic.api :as d]
             [differ.core :as differ]
-            [clojure.pprint :refer [pprint]]
+            [zprint.core :refer [zprint]]
             [clojure.test.check :refer [quick-check]]
             [clojure.test.check.generators :as tgen]
             [clojure.test.check.properties :as tprop]
@@ -48,7 +49,7 @@
      [:schema/age   :cardinality/one  int?]
      [:schema/aka   :cardinality/many string?]]))
 
-(def datomic-schema
+(def d-schema
   (gen-datomic-schema
    [[:schema/name  :db.cardinality/one  :db.type/string]
     [:schema/age   :db.cardinality/one  :db.type/long]
@@ -59,88 +60,24 @@
    :schema/age  {:db/cardinality :db.cardinality/one}
    :schema/aka  {:db/cardinality :db.cardinality/many}})
 
-;;(defn upsert [store tx]
-;;  (store/+eavs store (store/eav-seq (:attrs store) tx)))
-;;
-;;(defn retract [store tx]
-;;  (store/-eavs store (store/eav-seq (:attrs store) tx)))
-;;
-;;;; -------------
-;;
-;;;; From: https://stackoverflow.com/a/43722784/471795
-;;(defn map->nsmap
-;;  "Namespace a map"
-;;  [m n]
-;;  (reduce-kv (fn [acc k v]
-;;               (let [new-kw (if (and (keyword? k)
-;;                                     (not (qualified-keyword? k)))
-;;                              (keyword (str n) (name k))
-;;                              k) ]
-;;                 (assoc acc new-kw v)))
-;;             {} m))
-;;
-;;;; -------------
-;;
-;;(defn clara-eav->tuple
-;;  [eav]
-;;  ((juxt :e #(keyword (name (:a %))) :v) eav))
-;;
-;;(defn clara-store->tuples
-;;  [store]
-;;  (map clara-eav->tuple
-;;       (mapcat #(#'store/entity->eav-seq (:attrs store) %)
-;;               (store/dump-entity-maps store))))
-;;
-;;(defn ds-db->tuples
-;;  [db]
-;;  (map #(vec (take 3 %)) (seq db)))
-;;
-;;(defn apply-both [c-db d-db txes]
-;;  (let [#_ #_ c-db (reduce
-;;               (fn [db tx]
-;;                 (if-let [rid (get tx :db.fn/retractEntity)]
-;;                   (let [ntx (assoc (dissoc tx :db.fn/retractEntity)
-;;                                    :db/id rid)]
-;;                     (prn :ntx ntx :foo (map->nsmap ntx "schema"))
-;;                     (retract db (map->nsmap ntx "schema")))
-;;                   (upsert db (map->nsmap tx "schema"))))
-;;               c-db
-;;               txes)
-;;        d-db (reduce
-;;               (fn [db tx]
-;;                 (d/db-with db [tx]))
-;;               d-db
-;;               txes)]
-;;    [c-db d-db]))
-;;
-;;(defn test1 []
-;;  (let [c-db (store/init {:schema-mode :enforce
-;;                          :schema clara-schema})
-;;        d-db (d/empty-db ds-schema)
-;;        [c-db d-db]
-;;        ,,, (apply-both c-db d-db
-;;                        [{:db/id -1
-;;                          :name  "Maksim"
-;;                          :age   45
-;;                          :aka   ["Max Otto von Stierlitz", "Jack Ryan"]}
-;;                         {:db/id -2
-;;                          :name  "John Doe"
-;;                          :aka   ["James John Jones"]}
-;;                         [:db.fn/retractEntity 2]
-;;                         #_{:db.fnz/retractEntity 2
-;;                            }])]
-;;    [(set (clara-store->tuples c-db))
-;;     (set (ds-db->tuples d-db))]))
+(eav.rules/defsession* c-session
+  {:schema-mode :enforce
+   :tx-overwrite-mode :enforce
+   :schema clara-schema}
+  'clara-eav.main)
+
+(def d-uri "datomic:mem://gentest")
 
 (defn- eav-map->entity [attrs {:keys [e a v]}]
   ;; TODO THROW with helpful message if store/*store* is not bound
   ;; TODO pass in attrs?
-  (let [attrs (-> @store/*store* :attrs)]
-    {:db/id [e] a (if (= :cardinality/many (-> a attrs :cardinality))
+  (let [attrs (if (empty? attrs) (-> @store/*store* :attrs) attrs)]
+    {:eav/eid [e] a (if (= :cardinality/many (-> a attrs :cardinality))
                      #{v}
                      [v])}))
 
 (defn- entity-grouping [attrs args]
+  (prn :args args)
   (for [[e V] args
         :let [V' (apply merge-with into (map (partial eav-map->entity attrs) V))
               ms (doall ;; <- force execution to ensure dynamic var
@@ -160,17 +97,31 @@
 (eav.rules/defquery entities []
   [?entities <- (schementity {}) :from [[?e]]])
 
-(eav.rules/defsession* c-session
-  {:schema-mode :enforce
-   :schema clara-schema}
-  'clara-eav.main)
-
 (defn clara-entities [session]
   (binding [store/*store* (atom (:store session))]
     (doall (mapcat :?entities (rules/query session entities)))))
 
 (defn datascript-entities [db]
-  (d/q '[:find [(pull ?e [*]) ...] :where [?e]] db))
+  (let [xs (ds/q '[:find [(pull ?e [*]) ...] :where [?e]] db)]
+    (prn :ds-xs xs)
+    xs))
+
+(defn datomic-entities [db]
+  (let [eavs (for [a (keys ds-schema)
+                   [e v] (d/q '[:find ?e ?v
+                                :in $ ?a
+                                :where [?e ?a ?v]] db a)]
+               {:e e :a a :v v})]
+    (entity-grouping (store/schema->attrs clara-schema)
+                   (group-by :e eavs)))
+
+  #_(d/datoms db {:index :eavt})
+
+  #_(let [xs (for [{:keys [e a v]} (d/seek-datoms db :eavt)]
+               [e a v])]
+      (prn :count-xs (count xs))
+      (prn :xs xs)
+      []))
 
 (defn- card-many->set
   [attrs entity]
@@ -184,48 +135,121 @@
   (for [entity entities]
     (card-many->set (store/schema->attrs schema) entity)))
 
-(defn compare-states
-  [clara-schema clara-session dsdb]
-  (let [norm (partial normalize-entities clara-schema)]
-    {:clara      (set (-> (clara-entities clara-session) th/strip-ids))
-     :store      (set (-> (:store clara-session) store/dump-entity-maps th/strip-ids norm))
-     :datascript (set (-> dsdb datascript-entities th/strip-ids norm))}))
+(def d-conn
+  (do
+    (d/delete-database d-uri)
+    (d/create-database d-uri)
+    (let [d-conn (d/connect d-uri)]
+      @(d/transact d-conn d-schema)
+      d-conn)))
 
-(defn run-tx [mode tx]
-  #_(clojure.pprint/pprint tx)
-  (let [norm (partial normalize-entities clara-schema)
-        c-session (try (-> (eav.rules/upsert c-session tx)
-                           (rules/fire-rules))
+(def num-eids 10)
+
+(def REAL-IDS
+  (let [tx-fn #(vector %1 %2 :db/doc "TEMPORARY")
+        tx (d/transact d-conn (map #(tx-fn :db/add %)
+                                   (repeatedly num-eids #(d/tempid :db.part/user))))
+        eids (-> @tx :tempids vals)]
+   (d/transact d-conn (map #(tx-fn :db/retract %) eids))
+   eids))
+
+(defn run-tx [tx]
+  (let [norm-fn (partial normalize-entities clara-schema)]
+    (loop [c-session c-session
+           ds-db (ds/empty-db ds-schema)
+           d-db (d/db d-conn)
+           [[action items] & tx] tx]
+      (let [eavs (store/eav-seq clara-schema items)
+            [ds-cmd c-fn] (condp = action
+                            :insert [:db/add eav.rules/upsert]
+                            :retract [:db/retract eav.rules/retract])
+            ds-tx (map (fn [{:keys [e a v]}] [ds-cmd (int (mod e Integer/MAX_VALUE)) a v]) eavs)
+            d-tx (map (fn [{:keys [e a v]}] [ds-cmd (datomic.db.DbId. :db.part/user e) a v]) eavs)
+            ;;_ (prn :eavs eavs)
+            c-session (try (-> (c-fn c-session eavs)
+                               (rules/fire-rules))
+                           (catch Exception e
+                             (println e)
+                             :exception))
+            ds-db (try (ds/db-with ds-db ds-tx)
                        (catch Exception e
                          (println e)
                          :exception))
-        ds-db (try (-> (d/empty-db ds-schema)
-                       (d/db-with (map (fn [{:keys [e a v]}] [:db/add e a v]) tx)))
-                   (catch Exception e
-                     (println e)
-                     :exception))]
-    #_(compare-states clara-schema c-session ds-db)
-    (merge
-     {:clara :exception :store :exception :datascript :exception}
-     (when (not= :exception c-session)
-       {:clara      (set (-> (clara-entities c-session) th/strip-ids))
-        :store      (set (-> (:store c-session) store/dump-entity-maps th/strip-ids norm))})
-     (when (not= :exception ds-db)
-       {:datascript (set (-> ds-db datascript-entities th/strip-ids norm))}))))
+            _ (prn :d-tx d-tx)
+            d-db (:db-after (try (d/with d-db d-tx)
+                                 (catch Exception e
+                                   (println e)
+                                   {:db-after :exception})))]
+        (if (seq tx)
+          (recur c-session ds-db d-db tx)
+          (merge
+           {:clara {:exception-on eavs}
+            :store {:exception-on eavs}
+            :datomic {:exception-on eavs}
+            :datascript {:exception-on eavs}}
+           (when (not= :exception c-session)
+             {:clara      (set (-> (clara-entities c-session) th/strip-ids))
+              :store      (set (-> (:store c-session) store/dump-entity-maps th/strip-ids norm-fn))})
+           (when (not= :exception d-db)
+             {:datomic (set (-> d-db datomic-entities th/strip-ids norm-fn))})
+           (when (not= :exception ds-db)
+             {:datascript (set (-> ds-db datascript-entities th/strip-ids norm-fn))})))))))
 
-(defn test2 []
-  (run-tx [#:schema{:db/id -1
-                    :name  "Maksim"
-                    :age   45
-                    :aka   ["Max Otto von Stierlitz", "Jack Ryan"]}
-           #:schema{:db/id -2
-                    :name  "John Doe"
-                    :aka   ["James John Jones"]}]))
+(defn zzprint [prefix & args]
+  (let [s (with-out-str (apply zprint args))]
+    (print (clojure.string/replace s #"(?m)^" prefix))))
+
+(defn check-tx [tx]
+  (println "----- using tx:")
+  (zzprint "    " tx)
+  (let [res (run-tx tx)]
+    (println "----- full res:")
+    (zzprint "    " res)
+    (if (apply = (vals res))
+      (do
+       (println "SUCCESS (identical)")
+       res)
+      (do
+        (println "FAILURE")
+        (println "clara/store diff:")
+        (let [[added removed] (differ/diff (:clara res) (:store res))]
+          (zzprint "    " {:store added
+                           :clara removed}))
+        (println "clara/datascript diff:")
+        (let [[added removed] (differ/diff (:clara res) (:datascript res))]
+          (zzprint "    " {:datascript added
+                           :clara removed}))
+        (println "clara/datomic diff:")
+        (let [[added removed] (differ/diff (:clara res) (:datomic res))]
+          (zzprint "    " {:datomic added
+                           :clara removed}))
+        (println "-----")
+        res))))
+
+(defn sanity-check-1 [action]
+  (let [items [#:schema{:eav/eid -1
+                        :name  "Maksim"
+                        :age   45}]
+        res (check-tx [[action items]])]
+    (apply = (vals res))))
+
+(defn sanity-check-2 [action]
+  (let [items [#:schema{:eav/eid -1
+                        :name  "Maksim"
+                        :age   45
+                        :aka   ["Max Otto von Stierlitz", "Jack Ryan"]}
+               #:schema{:eav/eid -2
+                        :name  "John Doe"
+                        :aka   ["James John Jones"]}]
+        res (check-tx [[action items]])]
+    (apply = (vals res))))
+
 
 ;; Datascript exception on ID 0
-(def IDS
-  [-100 -20 -10 -2 -1
-   11000 12000 13000 14000 15000 16000 17000 18000 19000 ])
+(def TEMP-IDS [-100 -20 -10 -2 -1])
+;(def TEMP-IDS ["-100" "-20" "-10" "-2" "-1"])
+;(def REAL-IDS [11000 12000 13000 14000 15000 16000 17000 18000 19000])
+(def IDS (into TEMP-IDS REAL-IDS))
 
 (def AGES
   [1 2 3 4 5 6 7 8 9 10 11 20 50 100 101])
@@ -244,116 +268,51 @@
    "Anamika"
    "Mario Rossi"])
 
-(s/def ::tx-stream (s/coll-of ::tx-event))
-(s/def ::tx-event (s/cat :mode ::tx-mode :tx ::tx))
-(s/def ::tx-mode #{:insert :retract})
-(s/def ::tx (s/coll-of ::tx-statement))
-(s/def :schema/name #{"Maksim"
-                      "Max Otto von Stierlitz"
-                      "Jack Ryan"
-                      "John Doe"
-                      "Jane Doe"
-                      "James John Jones"
-                      "Jan Novak"
-                      "Karel Novak"
-                      "Joe Farnarkle"
-                      "Erika Mustermann"
-                      "Anamika"
-                      "Mario Rossi"})
-(s/def :schema/age #{1 2 3 4 5 6 7 8 9 10 11 20 50 100 101})
-(s/def :schema/aka (s/coll-of :schema/name :kind set?))
-(s/def ::tx-statement (s/keys :req [:db/id]
-                              :opt [:schema/name :schema/age :schema/aka]))
-
-#_(def tx-gen (s/gen ::tx-stream {:db/id #(s/gen #{-100 -20 -10 -2 -1
-                                                 11000 12000 13000 14000 15000 16000 17000 18000 19000})}))
-
-(def tx-gen (s/gen ::tx-stream {::eav/e #(s/gen (set IDS))}))
-
-(defn create-gen
+(defn create-gen-tx
   []
-  (tgen/vector
-   (tgen/tuple
-    (tgen/frequency [[40 (tgen/return :insert)]
-                     [60 (tgen/return :retract)]])
-    (tgen/fmap
-     #(store/eav-seq clara-schema %)
-     (tgen/vector
-      (tgen/fmap
-       (fn [[id name? name age? age aka? aka]]
-         (merge
-          {:db/id (nth (cycle IDS) id)}
-          (when name?
-            {:schema/name (nth (cycle NAMES) name)})
-          (when age?
-            {:schema/age (nth (cycle AGES) age)})
-          (when aka?
-            {:schema/aka (set (map #(nth (cycle NAMES) %) aka))})))
-       (tgen/tuple
-        tgen/nat
-        tgen/boolean tgen/nat
-        tgen/boolean tgen/nat
-        tgen/boolean (tgen/vector tgen/nat 0 (count NAMES)))))))))
+  (tgen/not-empty
+   (tgen/vector
+    (tgen/let [action (tgen/frequency [[40 (tgen/return :insert)]
+                                       [60 (tgen/return :retract)]])]
+      (tgen/tuple
+       (tgen/return action)
+       (tgen/vector
+        (tgen/fmap
+         (fn [[id name? name age? age aka? aka]]
+           (merge
+            (condp = action
+              :insert {:eav/eid (nth (cycle IDS) id)}
+              :retract {:eav/eid (nth (cycle REAL-IDS) id)})
+            (when name?
+              {:schema/name (nth (cycle NAMES) name)})
+            (when age?
+              {:schema/age (nth (cycle AGES) age)})
+            (when aka?
+              {:schema/aka (set (map #(nth (cycle NAMES) %) aka))})))
+         (tgen/tuple
+          tgen/nat
+          tgen/boolean tgen/nat
+          tgen/boolean tgen/nat
+          tgen/boolean (tgen/vector tgen/nat 0 (count NAMES))))))))))
 
-(defn test3 []
-  (let [gen (create-gen)
-        samp (tgen/sample gen 11)
-        _ (pprint samp)
-        res (run-tx :assert samp)]
-    (if (apply = (vals res))
-      (println "SUCCESS identical")
-      (do
-        (println "FAILURE")
-        (println "clara/store diff:")
-        (let [[added removed] (differ/diff (:clara res) (:store res))]
-          (pprint {:store added
-                   :clara removed}))
-        (println "clara/datascript diff:")
-        (let [[added removed] (differ/diff (:clara res) (:datascript res))]
-          (pprint {:datascript added
-                   :clara removed}))
-        (println "-----------------------")
-        res))))
+(def tx-prop
+  (tprop/for-all
+   [tx (create-gen-tx)]
+   (let [res (run-tx tx)]
+     (apply = (vals res)))))
+
+(defn do-gen-test [size]
+  (quick-check size tx-prop))
 
 (def bad-001
-  [{:db/id 1001}
-   {:db/id -10}
-   {:db/id -9, :schema/name "Jane Doe"}
-   {:db/id 1003, :schema/aka #{"Jack Ryan"}}])
+  [{:eav/eid 1001}
+   {:eav/eid -10}
+   {:eav/eid -9, :schema/name "Jane Doe"}
+   {:eav/eid 1003, :schema/aka #{"Jack Ryan"}}])
 
 (def bad-002
   [[-100, :schema/name, "Maksim"] [-100, :schema/age, 1] [-100, :schema/aka, "Maksim"] [-20, :schema/aka, "Max Otto von Stierlitz"] [-20, :schema/aka, "Maksim"] [-20, :schema/aka, "Jack Ryan"] [-20, :schema/aka, "Max Otto von Stierlitz"] [-100, :schema/age, 5] [-100, :schema/aka, "Jack Ryan"] [-100, :schema/aka, "John Doe"] [-100, :schema/aka, "Max Otto von Stierlitz"] [-100, :schema/aka, "Jane Doe"] [-100, :schema/aka, "Maksim"] [-20, :schema/age, 4] [-2, :schema/name, "Jane Doe"] [1003, :schema/age, 7] [1003, :schema/aka, "Maksim"] [-1, :schema/name, "Joe Farnarkle"] [-1, :schema/age, 3] [-2, :schema/aka, "James John Jones"] [-2, :schema/aka, "Joe Farnarkle"] [-2, :schema/aka, "Erika Mustermann"] [1004, :schema/name, "Karel Novak"] [1004, :schema/age, 3] [1004, :schema/aka, "James John Jones"] [1004, :schema/aka, "Joe Farnarkle"] [1004, :schema/aka, "John Doe"] [1004, :schema/aka, "Jan Novak"] [1004, :schema/aka, "Max Otto von Stierlitz"] [1004, :schema/aka, "Erika Mustermann"] [1004, :schema/aka, "Jane Doe"]])
 
-(defn test-case [mode samp]
-  (let [samp (store/eav-seq samp)
-        _ (pprint samp)
-        res (run-tx mode samp)]
-    (if (apply = (vals res))
-      (println "SUCCESS identical")
-      (do
-        (println "FAILURE")
-        (println "clara/store diff:")
-        (let [[added removed] (differ/diff (:clara res) (:store res))]
-          (pprint {:store added
-                   :clara removed}))
-        (println "clara/datascript diff:")
-        (let [[added removed] (differ/diff (:clara res) (:datascript res))]
-          (pprint {:datascript added
-                   :clara removed}))
-        (println "-----------------------")
-        res))))
-
-(defn test4 [num-tests & qc-opts]
-  (let [prop (tprop/for-all
-              [[mode samp] (s/gen ::tx-stream) #_(create-gen)]
-              (let [res (run-tx mode samp)]
-                #_#_
-                (prn :samp samp)
-                (prn :res-vals (vals res))
-                (and (not= :exception (-> res :clara))
-                     (apply = (vals res)))))]
-    (apply quick-check num-tests prop qc-opts)))
-
-(defn -main [& argv]
-  (pprint (test2))
-  (apply = (vals (test2))))
+#_(defn -main [& argv]
+    (zprint (test2))
+    (apply = (vals (test2))))
