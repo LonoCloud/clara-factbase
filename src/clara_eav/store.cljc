@@ -438,6 +438,7 @@
             (update store :insertables conj eav)
             (update-in store [:eav-index e a] update-fn v))
 
+          ;; TODO need to consider difference between in db and in tx
           (present? v idx-v) ;; In the database, but different
           (as-> store store
             (update store :insertables conj eav)
