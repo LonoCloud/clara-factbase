@@ -195,20 +195,20 @@
 (def store-enforce-schema
   (store/init
    {:schema-mode :enforce
-    :schema full-schema }))
+    :schema full-schema}))
 
 ;; Store with full-schema and schema,tx-overwrite enforcement
 (def store-enforce-schema-overwrite
   (store/init
    {:schema-mode :enforce
     :tx-overwrite-mode :enforce
-    :schema full-schema }))
+    :schema full-schema}))
 
 (def store-standard-enforce
   (store/init
    {:schema-mode :enforce
     :tx-overwrite-mode :enforce
-    :schema standard-schema }))
+    :schema standard-schema}))
 
 (def foo      #:schema{:eav/eid 1    :foo 1})
 (def bar      #:schema{:eav/eid 2    :bar 2})
@@ -263,7 +263,7 @@
                                                 #:schema{:eav/eid 2 :any 2}
                                                 #:schema{:eav/eid 3 :any 3}
                                                 #:schema{:eav/eid 5 :any 5}])
-          store (upsert store [#:schema{:eav/eid -1 :any 4} ])]
+          store (upsert store [#:schema{:eav/eid -1 :any 4}])]
       (is (= (set (store/dump-entity-maps store))
              (set [#:schema{:eav/eid 0 :any 0}
                    #:schema{:eav/eid 1 :any 1}
@@ -273,18 +273,18 @@
                    #:schema{:eav/eid 5 :any 5}])))))
   (testing "simple ident retract"
     (let [store (upsert store-standard-enforce [#:schema{:eav/eid 1 :uniq-ident 4}])
-          store (retract store [#:schema{:eav/eid 1 :uniq-ident 4} ])]
+          store (retract store [#:schema{:eav/eid 1 :uniq-ident 4}])]
       (is (= (store/dump-entity-maps store)
              []))))
   (testing "simple ident retract 2"
     (let [store (upsert store-standard-enforce [#:schema{:eav/eid 1
                                                          :uniq-ident 1
                                                          :any 1}])
-          store (retract store [#:schema{:eav/eid 1 :uniq-ident 1} ])
-          store (upsert store [#:schema{:eav/eid -1 :uniq-ident 1} ])]
+          store (retract store [#:schema{:eav/eid 1 :uniq-ident 1}])
+          store (upsert store [#:schema{:eav/eid -1 :uniq-ident 1}])]
       (is (= (store/dump-entity-maps store)
              [#:schema{:eav/eid 1 :any 1}
-              #:schema{:eav/eid 2 :uniq-ident 1} ]))))
+              #:schema{:eav/eid 2 :uniq-ident 1}]))))
   (testing "simple ident tx-overwrite (ignore)"
     (let [store (upsert store-enforce-schema [tina arlan mal])]
       (is true)))
@@ -307,7 +307,7 @@
                                                  (eav/->EAV 1 :schema/parking-space 2)
                                                  (eav/->EAV 1 :schema/parking-space 9)]]])))))
   (testing "simple ident committed collision"
-    (let [store (upsert store-enforce-schema [tina tina-age arlan ])]
+    (let [store (upsert store-enforce-schema [tina tina-age arlan])]
       (try
         (upsert (store/state store) [mal])
         (is false)
@@ -335,6 +335,5 @@
     (let [store (upsert store-standard-enforce [#:schema{:eav/eid 1 :any-many [1]}])
           store (upsert store [#:schema{:eav/eid 1 :any-many [2]}])]
       (is (= (store/dump-entity-maps store)
-             [#:schema{:eav/eid 1 :any-many #{1 2}}]))))
+             [#:schema{:eav/eid 1 :any-many #{1 2}}])))))
   ;; TODO card/many ref test
- )

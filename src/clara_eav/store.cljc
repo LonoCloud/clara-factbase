@@ -127,8 +127,8 @@
   (s/assert ::options options)
   (let [{:keys [schema] :as merged-options} (merge default-options options)
         {idents :unique/identity values :unique/value} (group-by :unique schema)]
-    (merge default-store {:options merged-options
-                          :attrs (schema->attrs schema)})))
+      (merge default-store {:options merged-options
+                            :attrs (schema->attrs schema)})))
 
 (s/fdef state
   :args (s/cat :store ::store-tx)
