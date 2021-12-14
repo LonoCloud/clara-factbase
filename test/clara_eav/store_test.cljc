@@ -288,7 +288,16 @@
   (testing "simple ident tx-overwrite (ignore)"
     (let [store (upsert store-enforce-schema [tina arlan mal])]
       (is true)))
-  (testing "simple ident tx-overwrite (enforce)"
+  (testing "card/one tx collision (enforce)"
+    (try
+      (upsert store-enforce-schema-overwrite
+              [[1 :schema/foo "SAME"]
+               [1 :schema/foo "DIFFERENT"]])
+      (is false "FAILURE: exception expected")
+      (catch #?(:clj Exception :cljs js/Error) e
+        (prn :card-one-tx-collision (-> e ex-data))
+        (is true))))
+  (testing "upsert ident tx-overwrite (enforce)"
     (try
       (upsert store-enforce-schema-overwrite [tina arlan mal])
       (is false)
