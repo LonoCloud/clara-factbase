@@ -60,11 +60,38 @@
   [name & form]
   `(dsl/defquery ~name ~@form))
 
+;; Transactions
+
+(s/fdef transact
+  :args (s/cat :session ::session/session
+               :tx ::store/tx))
+(defn transact
+  [session tx]
+  (let [{{:keys [attrs] :as store} :store} session
+        {:keys [insertables retractables tempids]
+         :as store'} (store/transact* store (store/tx-seq attrs tx))
+        keyfn (comp hash (juxt :e :a :v))
+        ;; TODO: no nothing needed for datomic mode
+        [insertables' retractables'] [insertables retractables]
+        ;; TODO: this is needed for datascript but it doesn't work for
+        ;; adds/retracts in the same transaction but datascript has an different
+        ;; behavior depending on the ordering or retracts/adds of the same EAV
+        #_#_
+        [insertables' retractables']
+        , (util/bagwise-mutual-diff keyfn insertables retractables)]
+    (cond-> session
+      (seq retractables') (engine/retract retractables')
+      (seq insertables') (engine/insert insertables')
+      true (assoc :store (store/state store')
+                  :tempids tempids))))
+
+#_(s/fdef transact!)
+
 ;; Retractions
 
 (s/fdef retract
   :args (s/cat :session ::session/session
-               :tx ::store/tx)
+               :tx ::store/facts)
   :ret ::session/session)
 (defn retract
   "Like Clara-Rules retract; tx is transaction data with no tempids."
@@ -76,7 +103,7 @@
       :store (store/state store'))))
 
 (s/fdef retract!
-  :args (s/cat :tx ::store/tx))
+  :args (s/cat :tx ::store/facts))
 (defn retract!
   "Like Clara-Rules retract!; tx is transaction data with no tempids."
   [tx]
@@ -91,28 +118,27 @@
 
 (s/fdef upsert
   :args (s/cat :session ::session/session
-               :tx ::store/tx)
+               :tx ::store/facts)
   :ret ::session/session)
 (defn upsert
   "Similar to Clara-Rules insert-all; tx is transaction data. Retracts EAVs that
   have the same eid and attribute but with a new value. The returned session has
   an extra `:tempids` key with the resolved tempids map {tempid -> eid}."
-  [session tx]
+  [session facts]
   (let [{{:keys [attrs] :as store} :store} session
         {:keys [insertables retractables tempids]
-         :as store} (store/+eavs store (store/eav-seq attrs tx))
-        ;;_ (prn :insertables insertables)
+         :as store'} (store/+eavs store (store/eav-seq attrs facts))
         keyfn (comp hash (juxt :e :a :v))
         [insertables' retractables']
         , (util/bagwise-mutual-diff keyfn insertables retractables)]
     (cond-> session
       (seq retractables') (engine/retract retractables')
       (seq insertables') (engine/insert insertables')
-      true (assoc :store (store/state store)
+      true (assoc :store (store/state store')
                   :tempids tempids))))
 
 (s/fdef upsert!*
-  :args (s/cat :tx ::store/tx
+  :args (s/cat :tx ::store/facts
                :unconditional boolean?))
 (defn- upsert!*
   [tx unconditional]
@@ -126,7 +152,7 @@
       (engine/insert-facts! insertables unconditional))))
 
 (s/fdef upsert!
-  :args (s/cat :tx ::store/tx))
+  :args (s/cat :tx ::store/facts))
 (defn upsert!
   "Similar to Clara-Rules insert-all!; tx is transaction data. Retracts EAVs
   that have the same eid and attribute but come with a new value."
@@ -134,7 +160,7 @@
   (upsert!* tx false))
 
 (s/fdef upsert-unconditional!
-  :args (s/cat :tx ::store/tx))
+  :args (s/cat :tx ::store/facts))
 (defn upsert-unconditional!
   "Similar to Clara-Rules insert-all-unconditional!; tx is transaction data.
   Retracts EAVs that have the same eid and attribute but with a new value."

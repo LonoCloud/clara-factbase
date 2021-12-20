@@ -119,6 +119,8 @@
 (def store
   (merge store/default-store
          {:max-eid 1
+          :tempids {}
+          :attrs {}
           :eav-index {0 {:todo/text "Buy eggs"}
                       1 {:todo/tag :not-cheese}}}))
 
@@ -195,19 +197,21 @@
 (def store-enforce-schema
   (store/init
    {:schema-mode :enforce
+    :tx-conflicts-mode :enforce
+    :multi-retract-submode :enforce
     :schema full-schema}))
 
-;; Store with full-schema and schema,tx-overwrite enforcement
+;; Store with full-schema and schema,tx-conflicts enforcement
 (def store-enforce-schema-overwrite
   (store/init
    {:schema-mode :enforce
-    :tx-overwrite-mode :enforce
+    :tx-conflicts-mode :enforce
     :schema full-schema}))
 
 (def store-standard-enforce
   (store/init
    {:schema-mode :enforce
-    :tx-overwrite-mode :enforce
+    :tx-conflicts-mode :enforce
     :schema standard-schema}))
 
 (def foo      #:schema{:eav/eid 1    :foo 1})
@@ -225,45 +229,48 @@
 (def may      #:schema{:eav/eid -6   :name "May" :ssn 234 :parking-space 10})
 (def franz    #:schema{:eav/eid -7   :name "Franz" :ssn 345 :parking-space 11})
 
-(defn upsert [store tx]
+(defn store-upsert [store tx]
   (store/+eavs store (store/eav-seq (:attrs store) tx)))
 
-(defn retract [store tx]
+(defn store-retract [store tx]
   (store/-eavs store (store/eav-seq (:attrs store) tx)))
+
+(defn store-transact [store tx]
+  (store/transact* store (store/tx-seq (:attrs store) tx)))
 
 (deftest schema-tests
   (testing "no-enforcement violation"
-    (upsert store-basic-schema [foo bar]))
+    (store-upsert store-basic-schema [foo bar]))
   (testing "schema enforcement"
-    (upsert store-enforce-schema [foo]))
+    (store-upsert store-enforce-schema [foo]))
   (testing "schema enforcement violation"
     (try
-      (upsert store-enforce-schema [foo bar])
+      (store-transact store-enforce-schema [foo bar])
       (is false)
       (catch #?(:clj Exception :cljs js/Error) e
              (is (= (-> e ex-data :no-schema)
                     (store/eav-seq (:attrs store-enforce-schema) [bar]))))))
   (testing "simple value non-collision"
-    (let [store (upsert store-enforce-schema [tina arlan])]
+    (let [store (store-upsert store-enforce-schema [tina arlan])]
       (is true)))
   (testing "simple value collision"
     (try
-      (upsert store-enforce-schema [tina bob])
+      (store-upsert store-enforce-schema [tina bob])
       (is false)
       (catch #?(:clj Exception :cljs js/Error) e
              (is (= (-> e ex-data :value-av-e-set)
                     {[:schema/parking-space 1] #{1 2}})))))
   (testing "simple ident upsert"
-    (let [store (upsert store-enforce-schema [tina tina-age])]
+    (let [store (store-upsert store-enforce-schema [tina tina-age])]
       (is (= (store/dump-entity-maps store)
              [#:schema{:name "Tina", :ssn 123, :id 777, :parking-space 1, :age 73, :eav/eid 1}]))))
   (testing "non-colliding-tempids"
-    (let [store (upsert store-standard-enforce [#:schema{:eav/eid 0 :any 0}
-                                                #:schema{:eav/eid 1 :any 1}
-                                                #:schema{:eav/eid 2 :any 2}
-                                                #:schema{:eav/eid 3 :any 3}
-                                                #:schema{:eav/eid 5 :any 5}])
-          store (upsert store [#:schema{:eav/eid -1 :any 4}])]
+    (let [store (store-upsert store-standard-enforce [#:schema{:eav/eid 0 :any 0}
+                                                      #:schema{:eav/eid 1 :any 1}
+                                                      #:schema{:eav/eid 2 :any 2}
+                                                      #:schema{:eav/eid 3 :any 3}
+                                                      #:schema{:eav/eid 5 :any 5}])
+          store (store-upsert store [#:schema{:eav/eid -1 :any 4}])]
       (is (= (set (store/dump-entity-maps store))
              (set [#:schema{:eav/eid 0 :any 0}
                    #:schema{:eav/eid 1 :any 1}
@@ -272,58 +279,63 @@
                    #:schema{:eav/eid 4 :any 4}
                    #:schema{:eav/eid 5 :any 5}])))))
   (testing "simple ident retract"
-    (let [store (upsert store-standard-enforce [#:schema{:eav/eid 1 :uniq-ident 4}])
-          store (retract store [#:schema{:eav/eid 1 :uniq-ident 4}])]
+    (let [store (store-upsert store-standard-enforce [#:schema{:eav/eid 1 :uniq-ident 4}])
+          store (store-retract store [#:schema{:eav/eid 1 :uniq-ident 4}])]
       (is (= (store/dump-entity-maps store)
              []))))
   (testing "simple ident retract 2"
-    (let [store (upsert store-standard-enforce [#:schema{:eav/eid 1
-                                                         :uniq-ident 1
-                                                         :any 1}])
-          store (retract store [#:schema{:eav/eid 1 :uniq-ident 1}])
-          store (upsert store [#:schema{:eav/eid -1 :uniq-ident 1}])]
+    (let [store (store-upsert store-standard-enforce [#:schema{:eav/eid 1
+                                                               :uniq-ident 1
+                                                               :any 1}])
+          store (store-retract store [#:schema{:eav/eid 1 :uniq-ident 1}])
+          store (store-upsert store [#:schema{:eav/eid -1 :uniq-ident 1}])]
       (is (= (store/dump-entity-maps store)
              [#:schema{:eav/eid 1 :any 1}
               #:schema{:eav/eid 2 :uniq-ident 1}]))))
-  (testing "simple ident tx-overwrite (ignore)"
-    (let [store (upsert store-enforce-schema [tina arlan mal])]
+  (testing "simple ident tx-conflicts (ignore)"
+    (let [store (store-upsert store-enforce-schema [tina arlan mal])]
       (is true)))
   (testing "card/one tx collision (enforce)"
     (try
-      (upsert store-enforce-schema-overwrite
-              [[1 :schema/foo "SAME"]
-               [1 :schema/foo "DIFFERENT"]])
+      (store-transact store-enforce-schema-overwrite
+              [[:db/add 1 :schema/foo "SAME"]
+               [:db/add 1 :schema/foo "DIFFERENT"]])
       (is false "FAILURE: exception expected")
       (catch #?(:clj Exception :cljs js/Error) e
-        (prn :card-one-tx-collision (-> e ex-data))
-        (is true))))
-  (testing "upsert ident tx-overwrite (enforce)"
+             (is (= (->> e ex-data :tx-conflicts (map :reason) set)
+                    #{:card-one-collide}))
+             (is (= (->> e ex-data :tx-conflicts (map :ctx) set)
+                    (set [[:cardinality/one :db/add 1 :schema/foo "DIFFERENT"]
+                          [:cardinality/one :db/add 1 :schema/foo "SAME"]]))))))
+  (testing "upsert ident tx-conflicts (enforce)"
     (try
-      (upsert store-enforce-schema-overwrite [tina arlan mal])
+      (store-transact store-enforce-schema-overwrite [tina arlan mal])
       (is false)
       (catch #?(:clj Exception :cljs js/Error) e
-             (is (= (-> e ex-data :tx-overwrites)
-                    [[[1 :schema/name] [(eav/->EAV 1 :schema/name "Tina")
-                                        (eav/->EAV 1 :schema/name "Arlan")
-                                        (eav/->EAV 1 :schema/name "Mal")]]
-                     [[1 :schema/ssn] [(eav/->EAV 1 :schema/ssn 123)
-                                       (eav/->EAV 1 :schema/ssn 456)
-                                       (eav/->EAV 1 :schema/ssn 123)]]
-                     [[1 :schema/id] [(eav/->EAV 1 :schema/id 777)
-                                      (eav/->EAV 1 :schema/id 888)
-                                      (eav/->EAV 1 :schema/id 888)]]
-                     [[1 :schema/parking-space] [(eav/->EAV 1 :schema/parking-space 1)
-                                                 (eav/->EAV 1 :schema/parking-space 2)
-                                                 (eav/->EAV 1 :schema/parking-space 9)]]])))))
+             (is (= (->> e ex-data :tx-conflicts (map :reason) set)
+                    #{:card-one-collide}))
+             (is (= (->> e ex-data :tx-conflicts (map :ctx) set)
+                    (set [[:cardinality/one :db/add 1 :schema/name "Tina"]
+                          [:cardinality/one :db/add 1 :schema/name "Arlan"]
+                          [:cardinality/one :db/add 1 :schema/name "Mal"]
+                          [:cardinality/one :db/add 1 :schema/id 777]
+                          [:cardinality/one :db/add 1 :schema/id 888]
+                          [:cardinality/one :db/add 1 :schema/id 888]
+                          [:cardinality/one :db/add 1 :schema/ssn 123]
+                          [:cardinality/one :db/add 1 :schema/ssn 456]
+                          [:cardinality/one :db/add 1 :schema/ssn 123]
+                          [:cardinality/one :db/add 1 :schema/parking-space 1]
+                          [:cardinality/one :db/add 1 :schema/parking-space 2]
+                          [:cardinality/one :db/add 1 :schema/parking-space 9]]))))))
   (testing "simple ident committed collision"
-    (let [store (upsert store-enforce-schema [tina tina-age arlan])]
+    (let [store (store-upsert store-enforce-schema [tina tina-age arlan])]
       (try
-        (upsert (store/state store) [mal])
+        (store-upsert (store/state store) [mal])
         (is false)
         (catch #?(:clj Exception :cljs js/Error) e
                (is true)))))
   (testing "in transaction upsert"
-    (let [store (upsert store-enforce-schema [bob bob-foo bob-age])]
+    (let [store (store-upsert store-enforce-schema [bob bob-foo bob-age])]
       (is (= (store/dump-entity-maps store)
              [{:schema/name "Bob",
                :schema/ssn 345,
@@ -332,7 +344,7 @@
                :schema/age 77,
                :eav/eid 88}]))))
   (testing "simple ref test"
-    (let [store (upsert store-enforce-schema-overwrite
+    (let [store (store-upsert store-enforce-schema-overwrite
                        [tina tina-boss
                         arlan franz may])]
       (= (store/dump-entity-maps store)
@@ -341,8 +353,8 @@
           #:schema{:name "Franz", :ssn 345, :parking-space 11, :eav/eid 4}
           #:schema{:name "May", :ssn 234, :parking-space 10, :eav/eid 3}])))
   (testing "simple card/many test"
-    (let [store (upsert store-standard-enforce [#:schema{:eav/eid 1 :any-many [1]}])
-          store (upsert store [#:schema{:eav/eid 1 :any-many [2]}])]
+    (let [store (store-upsert store-standard-enforce [#:schema{:eav/eid 1 :any-many [1]}])
+          store (store-upsert store [#:schema{:eav/eid 1 :any-many [2]}])]
       (is (= (store/dump-entity-maps store)
              [#:schema{:eav/eid 1 :any-many #{1 2}}])))))
   ;; TODO card/many ref test
