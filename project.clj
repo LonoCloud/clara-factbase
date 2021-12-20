@@ -14,7 +14,6 @@
                  [differ "0.3.3"]
                  [zprint "1.2.0"]
                  [org.clojure/test.check "1.1.1"]
-                 [com.datomic/dev-local "1.0.238"]
                  [datascript "0.18.4"]
                  [com.datomic/datomic-free "0.9.5697"]]
   :plugins [[lein-cljsbuild "1.1.8" :exclusions [org.clojure/clojure]]
