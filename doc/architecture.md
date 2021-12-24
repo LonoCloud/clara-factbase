@@ -109,3 +109,68 @@ Transaction error if more than one attr/val is being attempted to be inserted.
 Used in pull.
 Used in retract.
 
+# Questions
+
+- Do we want to allow tempid for entity ID during retraction for :unique/identity attributes
+
+
+
+# TODO
+
+- We do not currently distinguish between Clojure #{} sets as values and as :cardinality/many #{} syntax and storage (maybe mark with metadata or reify unique type?)
+- Maybe this is ambiguity starting with the syntax. Do we require card-many values to be expressed as #{val...} or can bare values sometimes be expressed. And does this leak over to the EAV triple syntax.
+
+
+## THINKING
+
+( R = NOOP, unless E AV or t AV,:uniq/id )
+( A = ...)
+
+R [E  AV]            -> remove EAV
+R [E  av]            -> NOOP
+R [e  av]            -> NOOP
+R [e  AV] :uniq/id   -> NOOP
+R [e  AV] :uniq/val  -> NOOP?
+R [E2 AV] :uniq/id   -> NOOP?
+R [E2 AV] :uniq/val  -> NOOP?
+
+            v--- Datascript errors
+R [t  av]            -> NOOP
+R [t  AV]            -> NOOP
+R [t  AV] :uniq/id   -> resolve id, remove EAV
+R [t  AV] :uniq/val  -> NOOP or ERROR?
+
+
+A [E  AV]            -> NOOP
+A [E  Av] :card/one  -> retract EAV, assert EAv
+A [E  Av] :card/many -> assert  EAv
+A [e  av]            -> assert (well, only if the e is one we have seen before, otherwise we go past valid entity ids in Datomic)
+A [e  AV] :uniq/id   -> ERROR
+A [e  AV] :uniq/val  -> ERROR
+A [E2 AV] :uniq/id   -> ERROR
+A [E2 AV] :uniq/val  -> ERROR
+
+A [t  av]            -> new     id, assert
+A [t  AV]            -> new     id, assert
+A [t  AV] :uniq/id   -> resolve id, NOOP
+A [t  AV] :uniq/val  -> ERROR
+
+:type/ref
+
+R [E A E] 
+R [E A E] :uniq/id
+R [E A E] :uniq/val
+R [E A e] 
+R [E A e] :uniq/id
+R [E A e] :uniq/val
+R [E A t]
+R [E A t] :uniq/id
+R [E A t] :uniq/val
+R [e A E]
+R [e A t]
+
+A [E A E]
+A [E A t]
+A [e A E]
+A [e A t]
+ 

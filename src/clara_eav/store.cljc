@@ -34,8 +34,9 @@
     ;; "Uniqueness can be declared on attributes of any value type,
     ;; including references (:db.type/ref). Only (:db.cardinality/one)
     ;; attributes can be unique."
-    #(or (not= :cardinality/many (:cardinality %))
-         (not (:unique %)))))
+    ;; TODO: Remove and note Datomic documentation is broken
+    #_#(or (not= :cardinality/many (:cardinality %)
+               (not (:unique %))))))
 (s/def ::schema
   ;; :kind clause is a work-around for https://clojure.atlassian.net/browse/CLJ-1975
   (s/coll-of ::schema-entry :kind #(not (record? %))))
@@ -159,8 +160,7 @@
 (defn init
   [options]
   (s/assert ::options options)
-  (let [{:keys [schema] :as merged-options} (merge default-options options)
-        {idents :unique/identity values :unique/value} (group-by :unique schema)]
+  (let [{:keys [schema] :as merged-options} (merge default-options options)]
       (merge default-store {:options merged-options
                             :attrs (schema->attrs schema)})))
 
@@ -262,8 +262,8 @@
 (defn- unify-sets
   "Perform unification across a collection of 'sets"
   [sets]
-  ;; Check for equality (i.e. unchanged sets) doesn't catch when the merging set
-  ;; is a subset of the merged set, hence the metadata check.
+  ;; We use a metadata check (::merged) instead of a check for equality.
+  ;; This is because a subset merged to a set doesn't change that set.
   (let [sets' (reduce #(let [result (merges %1 %2)]
                         (if (some (comp ::merged meta) result)
                           result
@@ -309,15 +309,31 @@
         av-e-set (collect-eids (concat db-eavs eavs))]
     av-e-set))
 
-(s/fdef av-index-merge
-  :args (s/cat :idx ::av-index
-               :eavs (s/nilable ::record-seq))
-  :ret ::av-index)
-(defn- av-index-merge [idx eavs]
-  (merge idx (zipmap (map (juxt :a :v) eavs)
-                     eavs)))
+(s/fdef update-av-index
+  :args (s/cat :store ::store-tx
+               :eav ::record)
+  :ret ::store-tx)
+(defn- update-av-index
+  [{:keys [attrs] :as store} [e a v :as eav]]
+  (let [action (-> eav meta :action)
+        att (-> a attrs :unique)
+        idx-name (get {:unique/identity :ident-index
+                       :unique/value :value-index}
+                      att)
+        idx-eav (get-in store [idx-name [a v]])]
+    (if idx-name
+      (cond
+        (and (= :db/add action) (not= eav idx-eav))
+        (update store idx-name assoc [a v] eav)
 
-(s/fdef update-eav-positions
+        (and (= :db/retract action) (= eav idx-eav))
+        (update store idx-name dissoc [a v] eav)
+
+        :default
+        store)
+      store)))
+
+(s/fdef update-eav-position
         :args (s/cat :position #{:e :v}
                      :id-mapping (s/map-of ::eav/e ::eav/e)
                      :eav ::eav)
@@ -333,39 +349,71 @@
         :ret boolean?)
 (defn- ref-eav?
   [attrs {:keys [e a v]}]
-  (-> a
-      attrs
-      :valueType
-      (= :valueType/ref)))
+  (-> a attrs :valueType (= :valueType/ref)))
+
+#_
+[[-1 :name "Dad"]
+ [-2 :name "Son"]
+ [-2 :parent -1]]
 
 (s/fdef remap-ids
-        :args (s/cat :attrs ::attrs
-                     :id-mapping (s/nilable (s/map-of ::eav/e ::eav/e))
-                     :eavs ::record-seq)
+  :args (s/cat :mkey #{:pre-upsert :pre-newid}
+               :attrs ::attrs
+               :id-mapping (s/nilable (s/map-of ::eav/e ::eav/e))
+               :eavs ::record-seq)
         :ret ::record-seq)
-(defn- remap-ids [attrs id-mapping eavs]
-  (->> eavs
-       (map #(update-eav-position :e id-mapping %))
-       (map #(if (ref-eav? attrs %)
-               (update-eav-position :v id-mapping %)
-               %))))
+(defn- remap-ids [mkey attrs id-mapping eavs]
+  (as-> eavs new-eavs
+    (map (fn [[e a v :as eav]]
+           (let [e' (get id-mapping e e)
+                 v' (if (ref-eav? attrs a)
+                      (get id-mapping v v)
+                      v)]
+             (with-meta (eav/->EAV e' a v')
+               (assoc (meta eav) mkey eav))))
+         eavs)))
+
+#_
+[[1 :uniqidref 3]
+ [1 :uniqid "foo"]
+ [2 :uniqid "bar"]
+ [3 :uniqid "baz"]]
+#_
+[[:db/add -1 :uniqidref -3]
+ [:db/add -2 :uniqid "bar"]
+ [:db/add -3 :uniqid "baz"]]
 
 (s/fdef merge-unique-identities
   :args (s/cat :store ::store-tx
                :tx-eavs ::record-seq)
   :ret ::record-seq)
 (defn- merge-unique-identities
+  ""
   [{:keys [attrs ident-index]} tx-eavs]
   (loop [eavs tx-eavs]
     (let [tx-ident-eavs (filter (comp #{:unique/identity} :unique attrs :a) eavs)
           ;; Map of attr-val to set of eids for identity eavs across the DB and tx eavs
-          ident-av-e-set (merge-av-e-set ident-index tx-ident-eavs)
+          temp-eavs (filter (fn [[e a v]]
+                                (tempid? e))
+                            tx-ident-eavs)
+          #_ (prn :eavs eavs)
+          #_ (prn :temp-eavs temp-eavs)
+          ident-av-e-set (merge-av-e-set ident-index temp-eavs)
+          #_#_
+          ident-av-e-set (into {}
+                               (for [[e a v :as eav] tx-ident-eavs
+                                     :let [ident-e (:e (get ident-index [a v]))]]
+                                 [eav (if ident-e
+                                        (conj #{e} ident-e)
+                                        #{e})]))
+
           ;; Create unification ready list of all tx-eav entities (as
           ;; singleton sets) and the entity sets from ident-av-e-set.
           all-eid-sets (concat (map (comp hash-set :e) eavs)
                                (vals ident-av-e-set))
           unified-eids (unify-sets all-eid-sets)
           ;; Categorize counts the number of /actual/ non-temp eids
+          ;; TODO: simplify as we only get 0 or 1 eid
           categorize #(case (count %) 0 :zero-eids, 1 :one-eid, :many-eids-violations)
           {:keys [zero-eids one-eid many-eids-violations]}
           , (group-by #(categorize (remove tempid? %)) unified-eids)
@@ -375,28 +423,44 @@
                                               (first (sort-by str tmpid-set)))]
                                  tmpid tmpid-set]
                              [tmpid id]))
-          new-eavs (remap-ids attrs id-mapping eavs)]
-      (when (seq many-eids-violations)
-        (throw (ex-info "Violation of :unique/ident attributes."
-                        {:ident-av-e-set ident-av-e-set
-                         :unified-eids unified-eids})))
-      (if (= new-eavs eavs)
-        new-eavs
-        (recur new-eavs)))))
+          unified-eavs (remap-ids :pre-upsert attrs id-mapping eavs)]
 
-(s/fdef resolve-uniqueness-attrs
+      ;; TODO: remove the below
+      #_(when (seq many-eids-violations)
+          (throw (ex-info "Violation of :unique/ident attributes."
+                          {:ident-av-e-set ident-av-e-set
+                           :unified-eids unified-eids})))
+
+      (if (= unified-eavs eavs)
+        unified-eavs
+        (recur unified-eavs)))))
+
+(s/fdef upsert-derived-retracts
   :args (s/cat :store ::store-tx
-               :tx-eavs ::record-seq)
-  :ret ::store-tx)
-(defn- resolve-uniqueness-attrs
-  "Resolve :unique/{identity,value} attributes in 'tx-eavs. For
-  :unique/identity, upsert by unifiying tmpids and mapping new eids.
-  :unique/value attributes do not upsert and can only collide if
-  duplicated. Insert the upserted and validated :unique/* eavs to the
-  appropriate indicies in the store."
-  [{:keys [max-eid attrs eav-index ident-index value-index] :as store} tx-eavs]
-  (let [new-eavs (merge-unique-identities store tx-eavs)
-        tempids (set (for [eav new-eavs
+               :eavs ::record-seq)
+  :ret ::record-seq)
+(defn upsert-derived-retracts
+  [{:keys [attrs eav-index]} eavs]
+  (concat eavs
+          (keep (fn [[e a v :as eav]]
+                  (let [eav-meta (meta eav)
+                        idx-v (get-in eav-index [e a] ::absentx)]
+                   (when (and (= :db/add (:action eav-meta))
+                              (= :cardinality/one (-> a attrs :cardinality))
+                              (not= idx-v ::absentx)
+                              (not= v idx-v))
+                     (prn :keeping e a v idx-v)
+                     (with-meta (eav/->EAV e a idx-v)
+                                (merge eav-meta {:action :db/retract
+                                                 :synthetic-retract true})))))
+                eavs)))
+
+(s/fdef apply-new-ids
+  :args (s/cat :store ::store-tx
+         :tx-eavs ::record-seq))
+(defn- apply-new-ids
+  [{:keys [max-eid attrs eav-index] :as store} tx-eavs]
+  (let [tempids (set (for [eav tx-eavs
                            pos [:e :v]
                            :when (or (= pos :e) (ref-eav? attrs eav))
                            :let [id (get eav pos)]
@@ -404,40 +468,19 @@
                        id))
         ;; Set up temp eids for mapping
         next-eid (inc max-eid)
-        existing-eids (set (concat (keys eav-index) (remove (comp tempid? :e) new-eavs)))
+        existing-eids (set (concat (keys eav-index) (remove (comp tempid? :e) tx-eavs)))
         new-eids (take (count tempids)
                        (remove existing-eids (map #(+ next-eid %) (range))))
         new-max-eid (or (last new-eids) max-eid)
         ;; Create a map of tempid to new-eid
-        tempid-newid-mapping (into {}
-                                   (for [[new-eid tempid]
-                                         (map list
-                                              new-eids
-                                              tempids)]
-                                     [tempid new-eid]))
-        ;; Apply tempid-newid-mapping to new-eavs using the existing
+        tempid-newid-mapping (zipmap tempids new-eids)
+        ;; Apply tempid-newid-mapping to tx-eavs using the existing
         ;; value if not in the mapping.
-        new-eavs (remap-ids attrs tempid-newid-mapping new-eavs)
-        ;; Re-gather ident and value eavs with resolved eids
-        {new-ident-eavs :unique/identity new-value-eavs :unique/value}
-        , (group-by (comp :unique attrs :a) new-eavs)
-        ;; Map of attr-val to set of eids for value eavs across the DB and new tx eavs
-        value-av-e-set (merge-av-e-set value-index new-value-eavs)
-        value-violations (filter (fn [[k v]] (< 1 (count v))) value-av-e-set)
-        ;; Merge new eavs into appropriate indicies
-        new-ident-index (av-index-merge ident-index new-ident-eavs)
-        new-value-index (av-index-merge value-index new-value-eavs)]
-
-    (when (seq value-violations)
-     (throw (ex-info "Violation of :unique/value attributes."
-                     {:value-av-e-set value-av-e-set})))
+        tx-eavs (remap-ids :pre-newid attrs tempid-newid-mapping tx-eavs)]
     {:store (assoc store
                    :tempids tempid-newid-mapping
-                   :tx-adds new-eavs
-                   :max-eid new-max-eid
-                   :ident-index new-ident-index
-                   :value-index new-value-index)
-     :eavs new-eavs}))
+                   :max-eid new-max-eid)
+     :eavs tx-eavs}))
 
 (s/fdef -eav
   :args (s/cat :store ::store-tx
@@ -460,10 +503,8 @@
                    cardinality)]
     (-> store
         (update :retractables conj eav)
-        (update :tx-retracts conj (first (remap-ids attrs tempids [eav])))
         (update :eav-index update-fn)
-        (update :ident-index dissoc [a v])
-        (update :value-index dissoc [a v]))))
+        (update-av-index eav))))
 
 (s/fdef -eavs
   :args (s/cat :store ::store
@@ -495,23 +536,13 @@
                    cardinality)]
     (if (= :eav/transient a)
       (update store :insertables conj eav)
-      (let [idx-v (get-in eav-index [e a] ::not-present)]
-        (cond
-          (= idx-v ::not-present) ;; EAV not in the eav-index
-          (as-> store store
-            (update store :insertables conj eav)
-            (update-in store [:eav-index e a] update-fn v))
-
-          (differs? idx-v v) ;; In the eav-index, but different
-          (as-> store store
-            (update store :insertables conj eav)
-            (if (= :cardinality/one cardinality)
-              (update store :retractables conj (assoc eav :v idx-v))
-              store)
-            (update-in store [:eav-index e a] update-fn v))
-
-          :default ;; Do nothing if same as what's in the eav-index
-          store)))))
+      (let [idx-v (get-in eav-index [e a] #{})]
+        (if (differs? idx-v v)
+         (as-> store store
+           (update store :insertables conj eav)
+           (update-in store [:eav-index e a] update-fn v)
+           (update-av-index store eav))
+         store)))))
 
 (s/fdef +eavs
   :args (s/cat :store ::store
@@ -523,8 +554,7 @@
   store including `insertables` and `retractables` eavs and resolved tempids map
   {tempid -> eid}."
   [{:keys [attrs options] :as store} eavs]
-  (let [{:keys [store eavs]} (resolve-uniqueness-attrs store eavs)]
-    (reduce +eav store eavs)))
+  (reduce +eav store eavs))
 
 (defn check-schema
   [mode attrs eavs]
@@ -535,9 +565,51 @@
                                      :enforce (throw (ex-info msg {:no-schema no-schema}))
                                      :warn (println (str msg " " (pr-str no-schema))))))))
 
-(defn check-tx-conflicts
+(s/fdef check-retracts
+  :args (s/cat :store ::store-tx
+               :eavs ::record-seq))
+
+(defn- check-retracts
+  [{:keys [options]} eavs]
+  (let [{:keys [retract-tempid-mode]} options]
+    (when (#{:enforce :warn} retract-tempid-mode)
+       (let [bad-retracts (filter (fn [eav]
+                                    (let [eav-meta (meta eav)]
+                                      (and (-> eav-meta :action (= :db/retract))
+                                           (-> eav-meta :pre-newid :e tempid?))))
+                                  eavs)
+             msg "Tempids not allowed in retractions"]
+           (when-not (empty? bad-retracts)
+             (let [bad-orig-eavs (map (comp :pre-upsert meta) bad-retracts)]
+               (case retract-tempid-mode
+                 :enforce (throw (ex-info msg {:bad-retracts bad-orig-eavs}))
+                   :warn (binding [*out* *err*] (println (str msg " " (pr-str bad-orig-eavs)))))))))))
+
+(s/fdef check-uniqueness-violations
+  :args (s/cat :store ::store-tx
+               :eavs ::record-seq))
+(defn- check-uniqueness-violations
+  [{:keys [attrs ident-index value-index]} eavs]
+  (let [{ident-eavs :unique/identity value-eavs :unique/value}
+        , (group-by (comp :unique attrs :a) eavs)
+        addition? (comp #{:db/add} :action meta)
+        ident-av-e-set (merge-av-e-set ident-index (filter addition? ident-eavs))
+        value-av-e-set (merge-av-e-set value-index (filter addition? value-eavs))
+        ident-violations (filter (fn [[k v]] (< 1 (count v))) ident-av-e-set)
+        value-violations (filter (fn [[k v]] (< 1 (count v))) value-av-e-set)]
+    (when (seq ident-violations)
+      (throw (ex-info "Violation of :unique/ident attributes."
+                      {:ident-violations ident-violations})))
+    (when (seq value-violations)
+     (throw (ex-info "Violation of :unique/value attributes."
+                     {:value-av-e-set value-av-e-set})))))
+
+(s/fdef check-tx-conflicts
+  :args (s/cat :store ::store-tx
+               :eavs ::record-seq))
+(defn- check-tx-conflicts
   "Checks for the following conditions depending on mode:
-     :retract-tmpid-mode - Disallows retractions still containing tempids
+     :retract-tempid-mode - Disallows retractions still containing tempids
      :tx-conflicts-mode  - Disallows assert & retract of identical EAV
                          - Disallows card/one asserts xor retracts of different values for given EA
          :multi-retract-submode - Allows retracts of differing card/one values for given EA
@@ -552,92 +624,90 @@
    Datascript has the following semantics:
    - temp ids ARE NOT allowed for retracts
    - anything else goes"
-  [{:keys [options attrs tx-adds tx-retracts] :as store}]
+  [{:keys [schema-mode options attrs ident-index value-index]} eavs]
   (let [{:keys [tx-conflicts-mode multi-retract-submode retract-tempid-mode]} options]
-   ;; :retracts-tmpid-mode enforcement
-   (when (#{:enforce :warn} retract-tempid-mode)
-    (let [bad-retracts (filter (fn [[e a v]] (tempid? e)) tx-retracts)
-          msg "Tempids not allowed in retractions"]
-      (when-not (empty? bad-retracts)
-        (case retract-tempid-mode
-          :enforce (throw (ex-info msg {:bad-retracts bad-retracts}))
-          :warn (binding [*out* *err*] (println (str msg " " (pr-str bad-retracts))))))))
-   ;; :tx-conflicts-mode enforcement
-   (when (#{:enforce :warn} tx-conflicts-mode)
-     (let [attr-card-map (->> (vals attrs)
+    (when (#{:enforce :warn} tx-conflicts-mode)
+       (let [attr-card-map (->> (vals attrs)
                               (map (juxt :ident :cardinality))
                               (into {}))
-           ;; cxeav - Cardinality action(X) Entity Attribute Value
-           cxeav-fn (fn [x [e a v]] [(attr-card-map a :cardinality/one) x e a v])
-           cxeavs (concat (map #(cxeav-fn :db/add %)     tx-adds)
-                          (map #(cxeav-fn :db/retract %) tx-retracts))
-           collisions [{:reason :eav-add-retract
-                        :msg "Cannot add and retract the same EAV"
-                        :col-fn (fn [c x e a v]
-                                  {:group [e a v] :collides [x]})}
-                       {:reason :card-one-collide
-                        :msg "Multiple adds/retracts of same cardinality/one attribute"
-                        :col-fn (fn [c x e a v]
-                                  (when (and
-                                         (= c :cardinality/one)
-                                         ;; :multi-retract-submode enforcement
-                                         (or (= x :db/add)
-                                             (and (#{:enforce :warn} multi-retract-submode)
-                                                  (= x :db/retract))))
-                                    {:group [x e a] :collides [v]}))}]
-           ;; Group for potential collisionx where key is collision context and value is
-           ;; part that can collide.
-           ;; Metadata has full context and reason.
-           groups (group-by (comp :group meta)
+             ;; cxeav - Cardinality action(X) Entity Attribute Value
+             cxeav-fn (fn [x [e a v]] [(attr-card-map a :cardinality/one) x e a v])
+             {tx-adds :db/add tx-retracts :db/retract}
+             , (group-by (comp :action meta)
+                         (remove (comp :synthetic-retract meta) eavs))
+             #_ (prn :tx-adds tx-adds)
+             #_ (prn :tx-retracts tx-retracts)
+             cxeavs (concat (map #(cxeav-fn :db/add %)     tx-adds)
+                            (map #(cxeav-fn :db/retract %) tx-retracts))
+             #_ (prn :cxeavs cxeavs)
+             collisions [{:reason :eav-add-retract
+                          :msg "Cannot add and retract the same EAV"
+                          :col-fn (fn [c x e a v]
+                                   {:group [e a v] :collides [x]})}
+                         {:reason :card-one-collide
+                          :msg "Multiple adds/retracts of same cardinality/one attribute"
+                          :col-fn (fn [c x e a v]
+                                   (when (and
+                                          (= c :cardinality/one)
+                                          ;; :multi-retract-submode enforcement
+                                          (or (= x :db/add)
+                                              (and (#{:enforce :warn} multi-retract-submode)
+                                                   (= x :db/retract))))
+                                     {:group [x e a] :collides [v]}))}]
+             ;; Group for potential collisionx where key is collision context and value is
+             ;; part that can collide.
+             ;; Metadata has full context and reason.
+             groups (group-by (comp :group meta)
                             (for [[c x e a v] cxeavs
                                   {:keys [reason col-fn]} collisions
                                   :let [{:keys [group collides] :as hit?} (col-fn c x e a v)]
                                   :when hit?]
-                              (with-meta collides {:group group :ctx [c x e a v] :reason reason})))
-           tx-conflicts (filter (fn [[k v]]
-                                  (< 1 (count (set v))))
+                             (with-meta collides {:group group :ctx [c x e a v] :reason reason})))
+             #_ (prn :groups groups)
+             tx-conflicts (filter (fn [[k v]]
+                                   (< 1 (count (set v))))
                                 groups)]
-       (when-not (empty? tx-conflicts)
-         (let [msg "Conflicting entries within transaction"
-               entries (for [[k vs] tx-conflicts
-                             v vs]
-                         (let [{:keys [group ctx reason]} (meta v)
-                               lookup (zipmap (map :reason collisions)
-                                              collisions)]
-                           {:msg (:msg (lookup reason))
-                            :reason reason
-                            :ctx ctx
-                            :group group
-                            :collision v}))]
-          (case tx-conflicts-mode
-            :enforce (throw (ex-info msg {:tx-conflicts entries}))
-            :warn (binding [*out* *err*] (println (str msg " " (pr-str tx-conflicts))))))))))
-  store)
+        (when-not (empty? tx-conflicts)
+          (let [msg "Conflicting entries within transaction"
+                entries (for [[k vs] tx-conflicts
+                              v vs]
+                          (let [{:keys [group ctx reason]} (meta v)
+                                lookup (zipmap (map :reason collisions)
+                                               collisions)]
+                            {:msg (:msg (lookup reason))
+                             :reason reason
+                             :ctx ctx
+                             :group group
+                             :collision v}))]
+           (case tx-conflicts-mode
+            :enforce (throw (ex-info msg {:tx-conflicts tx-conflicts :entries entries}))
+            :warn (binding [*out* *err*] (println (str msg " " (pr-str tx-conflicts)))))))))))
 
 (s/fdef tx->eav-seq
   :args (s/cat :action ::action
                :tx ::tx-vector-seq)
   :ret ::eav-seq)
-(defn tx->eav-seq
-  [action tx]
-  (for [[A e a v] tx
-        :when (= A action)]
-    (eav/->EAV e a v)))
+(defn- tx->eav-seq [tx]
+  (for [[A e a v] tx]
+    (with-meta (eav/->EAV e a v)
+               {:action A})))
 
 (s/fdef transact*
   :args (s/cat :store ::store-tx
                :tx    ::tx-vector-seq)
   :ret ::store-tx)
 (defn transact*
-  [{:keys [attrs options] :as store} tx]
-  (let [{:keys [schema-mode tx-conflicts-mode]} options
-        store (assoc store :tx-adds [] :tx-retracts []
-                           :insertables [] :retractables []
-                           :tempids {})
-        retract-eavs (tx->eav-seq :db/retract tx)
-        add-eavs (tx->eav-seq :db/add tx)]
-    (check-schema schema-mode attrs (concat retract-eavs add-eavs))
-    (-> store
-        (+eavs add-eavs)
-        (-eavs retract-eavs)
-        check-tx-conflicts)))
+  [{:keys [schema-mode attrs] :as store} tx]
+  (let [store (assoc store :insertables [] :retractables []
+                           :tempids {}) ;; TODO rename to tempid-map
+        eavs (tx->eav-seq tx)
+        _ (check-schema schema-mode attrs eavs)
+        eavs (merge-unique-identities store eavs)
+        eavs (upsert-derived-retracts store eavs)
+        {:keys [store eavs]} (apply-new-ids store eavs)
+        _ (check-retracts store eavs)
+        store (reduce -eav store (filter (comp #{:db/retract} :action meta) eavs))
+        _ (check-uniqueness-violations store eavs)
+        store (reduce +eav store (filter (comp #{:db/add} :action meta) eavs))
+        _ (check-tx-conflicts store eavs)]
+    store))

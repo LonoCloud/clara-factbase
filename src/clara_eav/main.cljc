@@ -72,18 +72,24 @@
 
 (def clara-schema
   (gen-schema
-    [[:schema/name  :cardinality/one  string?]
+    [[:schema/name  :cardinality/one  string? :unique :unique/identity]
      [:schema/age   :cardinality/one  int?]
+     [:schema/email :cardinality/many string? :unique :unique/identity]
      [:schema/aka   :cardinality/many string?]]))
 
 (def d-schema
   (gen-datomic-schema
-   [[:schema/name  :db.cardinality/one  :db.type/string]
+   [[:schema/name  :db.cardinality/one  :db.type/string :db/unique :db.unique/identity]
     [:schema/age   :db.cardinality/one  :db.type/long]
+    [:schema/email   :db.cardinality/many  :db.type/string :db/unique :db.unique/identity]
+    [:schema/idlink   :db.cardinality/one  :db.type/ref :db/unique :db.unique/identity]
+    [:schema/midlink   :db.cardinality/many  :db.type/ref :db/unique :db.unique/identity]
+    [:schema/link   :db.cardinality/one  :db.type/ref]
+    [:schema/mlink   :db.cardinality/many  :db.type/ref]
     [:schema/aka   :db.cardinality/many :db.type/string]]))
 
 (def ds-schema
-  {:schema/name {:db/cardinality :db.cardinality/one}
+  {:schema/name {:db/cardinality :db.cardinality/one :db/unique :db.unique/identity}
    :schema/age  {:db/cardinality :db.cardinality/one}
    :schema/aka  {:db/cardinality :db.cardinality/many}})
 
@@ -158,11 +164,12 @@
     xs))
 
 (defn datomic-entities [db]
-  (let [eavs (for [a (keys ds-schema)
+  (let [eavs (for [a (map :db/ident d-schema)
                    [e v] (d/q '[:find ?e ?v
                                 :in $ ?a
                                 :where [?e ?a ?v]] db a)]
                {:e e :a a :v v})]
+    (prn :datomic-entities eavs)
     (entity-grouping (store/schema->attrs clara-schema)
                    (group-by :e eavs))))
 
@@ -216,7 +223,7 @@
           {:datascript (->> ds-db datascript-entities normalize-entity-maps)}))
         (when (:datomic oracles)
          (if (:exception d-db)
-          {:datomic d-db}
+          (do (prn :d-exception) {:datomic d-db})
           {:datomic (->> d-db datomic-entities normalize-entity-maps)})))))))
 
 

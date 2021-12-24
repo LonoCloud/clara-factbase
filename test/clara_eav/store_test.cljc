@@ -358,3 +358,37 @@
       (is (= (store/dump-entity-maps store)
              [#:schema{:eav/eid 1 :any-many #{1 2}}])))))
   ;; TODO card/many ref test
+
+;; TODO: Datomic resolves to DB:
+;; [[1 :schema/name "Karel Novak"]
+;;  [2 :schema/name "Jan Novak"]]
+#_
+[[[:db/add -100 :schema/name "Karel Novak"]]
+ [[:db/retract -100 :schema/name "Jan Novak"]
+  [:db/add -20 :schema/name "Jan Novak"]
+  [:db/add -100 :schema/name "Karel Novak"]]]
+
+;; TODO: Datomic resolves to DB:
+;; [[1 :schema/name "Jane Doe"]]
+#_
+[[[:db/add -20 :schema/name "Jane Doe"]
+  [:db/add -100 :schema/name "Jane Doe"]]]
+
+;; NOTE Two retracts of temp-ids with same uniq/ident AV resolve to single newid
+
+;; TODO: Datomic resolves to DB:
+#_
+[{:schema/name "Max Otto von Stierlitz"} {:schema/name "Jane Doe"}]
+#_
+[[[:db/add -100 :schema/name "Max Otto von Stierlitz"]]
+ [[:db/add -100 :schema/name "Jane Doe"]
+  [:db/retract -100 :schema/name "Max Otto von Stierlitz"]
+  [:db/add -100 :schema/name "Jane Doe"]]]
+
+;; TODO: Datomic resolves to DB:
+#_
+({:schema/name "Maksim"} {:schema/name "Jan Novak"})
+#_
+[[[:db/add -100 :schema/name "Maksim"] [:db/add -20 :schema/name "Jan Novak"]]
+ [[:db/retract -10 :schema/name "Jan Novak"]
+  [:db/add -10 :schema/name "Maksim"]]]

@@ -6,6 +6,7 @@
   :dependencies [[org.clojure/clojure "1.10.1"]
                  [org.clojure/core.match "1.0.0"]
                  [org.clojure/spec.alpha "0.2.176"]
+                 [metosin/malli "0.7.5"]
                  [medley "1.3.0"]
                  [com.cerner/clara-rules "0.21.0"]
 
