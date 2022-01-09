@@ -389,24 +389,12 @@
   :ret ::record-seq)
 (defn- merge-unique-identities
   ""
-  [{:keys [attrs ident-index]} tx-eavs]
-  (loop [eavs tx-eavs]
+  [{:keys [attrs ident-index] :as store} tx-eavs]
+  (loop [store store eavs tx-eavs]
     (let [tx-ident-eavs (filter (comp #{:unique/identity} :unique attrs :a) eavs)
           ;; Map of attr-val to set of eids for identity eavs across the DB and tx eavs
-          temp-eavs (filter (fn [[e a v]]
-                                (tempid? e))
-                            tx-ident-eavs)
-          #_ (prn :eavs eavs)
-          #_ (prn :temp-eavs temp-eavs)
+          temp-eavs (filter (comp tempid? :e) tx-ident-eavs)
           ident-av-e-set (merge-av-e-set ident-index temp-eavs)
-          #_#_
-          ident-av-e-set (into {}
-                               (for [[e a v :as eav] tx-ident-eavs
-                                     :let [ident-e (:e (get ident-index [a v]))]]
-                                 [eav (if ident-e
-                                        (conj #{e} ident-e)
-                                        #{e})]))
-
           ;; Create unification ready list of all tx-eav entities (as
           ;; singleton sets) and the entity sets from ident-av-e-set.
           all-eid-sets (concat (map (comp hash-set :e) eavs)
@@ -423,17 +411,11 @@
                                               (first (sort-by str tmpid-set)))]
                                  tmpid tmpid-set]
                              [tmpid id]))
-          unified-eavs (remap-ids :pre-upsert attrs id-mapping eavs)]
-
-      ;; TODO: remove the below
-      #_(when (seq many-eids-violations)
-          (throw (ex-info "Violation of :unique/ident attributes."
-                          {:ident-av-e-set ident-av-e-set
-                           :unified-eids unified-eids})))
-
+          unified-eavs (remap-ids :pre-upsert attrs id-mapping eavs)
+          store (update store :tempids merge id-mapping)]
       (if (= unified-eavs eavs)
-        unified-eavs
-        (recur unified-eavs)))))
+        {:store store :eavs unified-eavs}
+        (recur store unified-eavs)))))
 
 (s/fdef upsert-derived-retracts
   :args (s/cat :store ::store-tx
@@ -449,7 +431,6 @@
                               (= :cardinality/one (-> a attrs :cardinality))
                               (not= idx-v ::absentx)
                               (not= v idx-v))
-                     (prn :keeping e a v idx-v)
                      (with-meta (eav/->EAV e a idx-v)
                                 (merge eav-meta {:action :db/retract
                                                  :synthetic-retract true})))))
@@ -702,7 +683,10 @@
                            :tempids {}) ;; TODO rename to tempid-map
         eavs (tx->eav-seq tx)
         _ (check-schema schema-mode attrs eavs)
-        eavs (merge-unique-identities store eavs)
+        {add-eavs :db/add ret-eavs :db/retract} (group-by (comp :action meta) eavs)
+        {:keys [store eavs]} (merge-unique-identities store add-eavs)
+        eavs (concat eavs (remap-ids :mid-tx attrs (:tempids store) ret-eavs))
+        {:keys [store eavs]} (merge-unique-identities store eavs)
         eavs (upsert-derived-retracts store eavs)
         {:keys [store eavs]} (apply-new-ids store eavs)
         _ (check-retracts store eavs)
