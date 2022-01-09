@@ -393,20 +393,8 @@
   (loop [eavs tx-eavs]
     (let [tx-ident-eavs (filter (comp #{:unique/identity} :unique attrs :a) eavs)
           ;; Map of attr-val to set of eids for identity eavs across the DB and tx eavs
-          temp-eavs (filter (fn [[e a v]]
-                                (tempid? e))
-                            tx-ident-eavs)
-          #_ (prn :eavs eavs)
-          #_ (prn :temp-eavs temp-eavs)
+          temp-eavs (filter (comp tempid? :e) tx-ident-eavs)
           ident-av-e-set (merge-av-e-set ident-index temp-eavs)
-          #_#_
-          ident-av-e-set (into {}
-                               (for [[e a v :as eav] tx-ident-eavs
-                                     :let [ident-e (:e (get ident-index [a v]))]]
-                                 [eav (if ident-e
-                                        (conj #{e} ident-e)
-                                        #{e})]))
-
           ;; Create unification ready list of all tx-eav entities (as
           ;; singleton sets) and the entity sets from ident-av-e-set.
           all-eid-sets (concat (map (comp hash-set :e) eavs)
