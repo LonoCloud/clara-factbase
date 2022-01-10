@@ -19,6 +19,8 @@
             [clojure.test.check :refer [quick-check]]
             [clojure.test.check.generators :as tgen]
             [clojure.test.check.properties :as tprop]
+
+            [clojure.math.combinatorics :as combo]
     #?@(:clj [[clojure.spec.alpha :as s]
               [clojure.spec.gen.alpha :as sgen]
               [clojure.spec.test.alpha :as stest]
@@ -95,11 +97,11 @@
 
 ;; Initialize datastores/DBs
 
-(eav.rules/defsession* c-session-like-datascript
+(eav.rules/defsession* clara-session-like-datascript
   (assoc store/datascript-default-options :schema clara-schema)
   'clara-eav.main)
 
-(eav.rules/defsession* c-session-like-datomic
+(eav.rules/defsession* clara-session-like-datomic
   (assoc store/datomic-default-options :schema clara-schema)
   'clara-eav.main)
 
@@ -142,8 +144,11 @@
                          (if (vector? v)
                            (if (apply = v)
                              [k  (first v)]
-                             (throw (ex-info "Repeated :cardinality/one values"
-                                             {:e e :a k :v v})))
+                             ;; TODO: datascript mode triggers this
+                             ;;(throw (ex-info "Repeated :cardinality/one values"
+                             ;;                {:e e :a k :v v})))
+                             ;;[k  (str "ERROR: Repeated :cardinality/one values: " v)])
+                             [k  v])
                            [k v]))
                        V'))]]
     (into {} ms)))
@@ -155,23 +160,6 @@
 (eav.rules/defquery entities []
   [?entities <- (schementity {}) :from [[?e]]])
 
-(defn clara-entities [session]
-  (binding [store/*store* (atom (:store session))]
-    (doall (mapcat :?entities (rules/query session entities)))))
-
-(defn datascript-entities [db]
-  (let [xs (ds/q '[:find [(pull ?e [*]) ...] :where [?e]] db)]
-    xs))
-
-(defn datomic-entities [db]
-  (let [eavs (for [a (map :db/ident d-schema)
-                   [e v] (d/q '[:find ?e ?v
-                                :in $ ?a
-                                :where [?e ?a ?v]] db a)]
-               {:e e :a a :v v})]
-    (prn :datomic-entities eavs)
-    (entity-grouping (store/schema->attrs clara-schema)
-                   (group-by :e eavs))))
 
 (defn- card-many->set
   [attrs entity]
@@ -180,51 +168,105 @@
                [k (set v)]
                [k v]))))
 
-(defn normalize-entities
+(defn- normalize-entities
   [entities]
   (for [entity entities]
     (card-many->set (store/schema->attrs clara-schema) entity)))
+
 (defn normalize-entity-maps
   [entity-maps]
   (->> entity-maps th/strip-ids normalize-entities (sort-by hash)))
 
+(defn clara-entities* [session]
+  (binding [store/*store* (atom (:store session))]
+    (doall (mapcat :?entities (rules/query session entities)))))
+
+(defn clara-entities [session]
+   (->> session clara-entities* th/strip-ids (sort-by hash)))
+(defn store-entities [session]
+  (->> session :store store/dump-entity-maps normalize-entity-maps))
+
+(defn datascript-entities* [db]
+  (ds/q '[:find [(pull ?e [*]) ...] :where [?e]] db))
+
+(defn datascript-entities [db]
+  (->> db datascript-entities* normalize-entity-maps))
+
+(defn datomic-entities* [db]
+  (let [eavs (for [a (map :db/ident d-schema)
+                   [e v] (d/q '[:find ?e ?v
+                                :in $ ?a
+                                :where [?e ?a ?v]] db a)]
+               {:e e :a a :v v})]
+    ;;(prn :datomic-entities eavs)
+    (entity-grouping (store/schema->attrs clara-schema)
+                   (group-by :e eavs))))
+
+(defn datomic-entities [db]
+  (->> db datomic-entities* normalize-entity-maps))
+
+(defn run-tx [{:keys [c-sess ds-db d-db res] :as ctx} tx]
+  (let [;; Apply transaction
+        res (or res (merge {:clara [] :store []}
+                           (when ds-db {:datascript []})
+                           (when d-db {:datomic []})))
+
+        c-sess (let [c-sess (try (-> (eav.rules/transact (with-meta c-sess {}) tx)
+                                     (rules/fire-rules))
+                                 (catch Exception e
+                                   (with-meta c-sess {:exception e :tx tx})))]
+                 (vary-meta c-sess merge {:c-entities (clara-entities c-sess)
+                                          :s-entities (store-entities c-sess)}))
+        #_#__ (prn :meta-c-sess (meta c-sess))
+
+        ds-db (when ds-db
+                (let [ds-db (try (ds/db-with (with-meta ds-db {}) tx)
+                                 (catch Exception e
+                                   (with-meta ds-db {:exception e :tx tx})))]
+                  (vary-meta ds-db merge {:entities (datascript-entities ds-db)})))
+        #_#__ (prn :meta-ds-db (meta ds-db))
+        #_#__ (prn :ds-db ds-db)
+
+        ;; TODO c-sort-tx
+        d-tx (sort-by (comp {:db/retract 1 :db/add 2} first)
+                     (map (fn [[A e a v]] [A (get ID->DATOMIC-ID e) a v]) tx))
+        #_#_d-tx (map (fn [[A e a v]] [A (get ID->DATOMIC-ID e) a v]) tx)
+        ;;_ (prn :d-tx d-tx)
+        d-db (when d-db
+               (let [d-db (try (:db-after (d/with (with-meta d-db {}) d-tx))
+                               (catch Exception e
+                                 (with-meta d-db {:exception e :tx tx})))]
+                 (vary-meta d-db merge {:entities (datomic-entities d-db)})))
+        #_#__ (prn :meta-d-db (meta d-db))
+
+        ;; Gather results
+        res (cond-> res
+              true  (update :clara      conj (let [m (meta c-sess)] (or (:c-entities m) m)))
+              true  (update :store      conj (let [m (meta c-sess)] (or (:s-entities m) m)))
+              ds-db (update :datascript conj (let [m (meta ds-db)]  (or (:entities m)   m)))
+              d-db  (update :datomic    conj (let [m (meta d-db)]   (or (:entities m)   m))))]
+    {:c-sess c-sess
+     :ds-db ds-db
+     :d-db d-db
+     :res res}))
+     
+   
+
 (defn run-txs [txs oracles]
   (assert (not (and (:datascript oracles) (:datomic oracles)))
           "Simultaneous datascript and datomic oracles not yet supported")
-  (loop [c-session (if (:datomic oracles)
-                     c-session-like-datomic
-                     c-session-like-datascript)
-         ds-db (when (:datascript oracles) (ds/empty-db ds-schema))
-         d-db (when (:datomic oracles) (d/db d-conn))
-         [tx & txs] txs]
-    ;(prn :tx tx)
-    (let [c-session (try (-> (eav.rules/transact c-session tx)
-                             (rules/fire-rules))
-                         (catch Exception e {:exception e :tx tx}))
-          ds-db (when (:datascript oracles)
-                  (try (ds/db-with ds-db tx)
-                       (catch Exception e {:exception e :tx tx})))
-          d-tx (map (fn [[A e a v]] [A (get ID->DATOMIC-ID e) a v]) tx)
-          ;;_ (prn :d-tx d-tx)
-          d-db (when (:datomic oracles)
-                 (try (:db-after (d/with d-db d-tx))
-                      (catch Exception e {:exception e :tx tx})))]
-      (if (and (seq tx) (not (some :exception [c-session ds-db d-db])))
-       (recur c-session ds-db d-db txs)
-       (merge
-        (if (:exception c-session)
-         {:clara c-session
-          :store c-session}
-         {:clara (->> c-session clara-entities th/strip-ids (sort-by hash))
-          :store (->> c-session :store store/dump-entity-maps normalize-entity-maps)})
-        (when (:datascript oracles)
-         (if (:exception ds-db)
-          {:datascript ds-db}
-          {:datascript (->> ds-db datascript-entities normalize-entity-maps)}))
-        (when (:datomic oracles)
-         (if (:exception d-db)
-          (do (prn :d-exception) {:datomic d-db})
-          {:datomic (->> d-db datomic-entities normalize-entity-maps)})))))))
+
+  (let [ctx {:c-sess (if (:datomic oracles)
+                       clara-session-like-datomic
+                       clara-session-like-datascript)
+             :ds-db (when (:datascript oracles) (ds/empty-db ds-schema))
+             :d-db (when (:datomic oracles) (d/db d-conn))}
+        ctx-res (reduce run-tx ctx txs)]
+        
+     #_(prn :count-txs (count txs) :max-tx-size (apply max 0 (map count txs))
+            :exceptions (count (filter :exception (-> ctx-res :res :datomic))))
+     ctx-res))
+       
 
 
 (defn zzprint [prefix & args]
@@ -232,15 +274,16 @@
     (print (clojure.string/replace s #"(?m)^" prefix))))
 
 (defn exception-elide [result]
-  (into {} (for [[k v] result]
-             [k (if (and (map? v) (contains? v :exception))
-                  (assoc v :exception :ELIDED)
-                  v)])))
+  (into {} (for [[k vs] result]
+             [k (vec (for [v vs]
+                       (if (and (map? v) (contains? v :exception))
+                         (assoc v :exception :ELIDED)
+                         v)))])))
 
 (defn check-txs [txs oracles]
   (println "----- using txs:")
   (zzprint "    " txs)
-  (let [full-res (run-txs txs oracles)
+  (let [full-res (:res (run-txs txs oracles))
         res (exception-elide full-res)]
     (println "----- res:")
     (zzprint "    " res)
@@ -320,6 +363,7 @@
   [id-fn]
   (tgen/not-empty
    (tgen/vector ; Transactions
+    (tgen/not-empty
      (tgen/fmap #(vec (apply concat %)) ; Transaction
       (tgen/vector
        (tgen/fmap ; Action group
@@ -340,18 +384,18 @@
          tgen/nat ;; id
          tgen/boolean tgen/nat ;; name
          tgen/boolean tgen/nat ;; age
-         tgen/boolean (tgen/vector tgen/nat 0 (count NAMES))))))))) ;; aka
+         tgen/boolean (tgen/vector tgen/nat 0 (count NAMES)))))))))) ;; aka
 
 (def txs-prop-datascript
  (tprop/for-all
   [txs (create-gen-txs (partial id-remap-fn false))]
-  (let [res (run-txs txs #{:datascript})]
+  (let [res (:res (run-txs txs #{:datascript}))]
     (apply = (vals (exception-elide res))))))
 
 (def txs-prop-datomic
   (tprop/for-all
    [txs (create-gen-txs (partial id-remap-fn true))]
-   (let [res (run-txs txs #{:datomic})]
+   (let [res (:res (run-txs txs #{:datomic}))]
      (apply = (vals (exception-elide res))))))
 
 (defn do-gen-datascript [size]
@@ -360,9 +404,203 @@
 (defn do-gen-datomic [size]
  (quick-check size txs-prop-datomic))
 
+(defn get-all-2x3-cases
+  []
+  (let [Aeavs-3x3 (for [v ["O" "X"]
+                        e [-10 -20]
+                        A [nil :db/add :db/retract]]
+                    (when A
+                      [A e :schema/name v]))
+        cases (for [case (combo/selections Aeavs-3x3 6)
+                    :let [[a1 a2 a3 b1 b2 b3] case
+                          tx1 (concat (when a1 [a1]) (when a2 [a2]) (when a3 [a3]))
+                          tx2 (concat (when b1 [b1]) (when b2 [b2]) (when b3 [b3]))
+                          txs (if (seq tx1)
+                                (if (seq tx2) [tx1 tx2] [tx1])
+                                (if (seq tx2) [tx2] nil))]
+                    :when txs]
+                txs)]
+    cases))
+
+(s/def ::cases (s/coll-of ::txseq))
+(s/def ::txseq (s/coll-of ::store/tx))
+
+(defn ab-get-all-2x3-cases []
+  (let [statements (for [v ["X" "O"] e [-1 -2] A [:db/add :db/retract]]
+                      [A e :schema/name v])
+        combos-1-3 (apply concat
+                          (for [n (range 1 (inc 3))] ; how many statements / tx?
+                            (combo/permuted-combinations statements n)))
+        cases (apply concat
+               (for [n (range 1 (inc 2))] ; how many transactions?
+                 (combo/selections combos-1-3 n)))
+        filtered (filter (fn [[[[A e a v]]]] (and (= e -1) (= v "X")))
+                         cases)]
+    filtered))
+
+(defn run-2x3-cases
+  [cases oracles]
+  (pmap
+    (fn [txs]
+      (let [full-res (:res (run-txs txs oracles))
+            res (exception-elide full-res)]
+        {:txs txs
+         :pass? (apply = (vals res))}))
+    cases))
+
+
+
 ;; (do (def res (do-gen-datascript 30)) (zprint res))
 ;; (do (def res (do-gen-datomic 30)) (zprint res))
 ;; (zprint (check-txs (-> res :shrunk :smallest (nth 0)) #{:datomic}))
 
 #_(defn -main [& argv]
     (do-gen-dataomici 20))
+
+;;({:res {:clara [({:schema/name "X"}) ({:schema/name "O"})],
+;;        :datomic [({:schema/name "X"}) ({:schema/name "X"} {:schema/name "O"})],
+;;        :store [({:schema/name "X"}) ({:schema/name "O"})]},
+;;  :tx (([:db/add -1 :schema/name "X"])
+;;       ([:db/retract -1 :schema/name "X"]
+;;        [:db/add -2 :schema/name "O"]
+;;        [:db/add -1 :schema/name "O"]))}
+;;
+;; {:res {:clara [({:schema/name "X"}) ({:schema/name "O"})],
+;;        :datomic [({:schema/name "X"}) ({:schema/name "X"} {:schema/name "O"})],
+;;        :store [({:schema/name "X"}) ({:schema/name "O"})]},
+;;  :tx (([:db/add -1 :schema/name "X"])
+;;       ([:db/add -2 :schema/name "O"]
+;;        [:db/retract -1 :schema/name "X"]
+;;        [:db/add -1 :schema/name "O"]))}
+;; {:res {:clara [({:schema/name "X"}) ({:schema/name "O"})],
+;;        :datomic [({:schema/name "X"}) ({:schema/name "X"} {:schema/name "O"})],
+;;        :store [({:schema/name "X"}) ({:schema/name "O"})]},
+;;  :tx (([:db/add -1 :schema/name "X"])
+;;       ([:db/add -2 :schema/name "O"]
+;;        [:db/add -1 :schema/name "O"]
+;;        [:db/retract -1 :schema/name "X"]))}
+;;
+;; {:res {:clara [({:schema/name "X"}) ({:schema/name "O"})],
+;;        :datomic [({:schema/name "X"}) ({:schema/name "X"} {:schema/name "O"})],
+;;        :store [({:schema/name "X"}) ({:schema/name "O"})]},
+;;  :tx (([:db/add -1 :schema/name "X"])
+;;       ([:db/retract -2 :schema/name "X"]
+;;        [:db/add -1 :schema/name "O"]
+;;        [:db/add -2 :schema/name "O"]))}
+;; {:res {:clara [({:schema/name "X"}) ({:schema/name "O"})],
+;;        :datomic [({:schema/name "X"}) ({:schema/name "X"} {:schema/name "O"})],
+;;        :store [({:schema/name "X"}) ({:schema/name "O"})]},
+;;  :tx (([:db/add -1 :schema/name "X"])
+;;       ([:db/add -1 :schema/name "O"]
+;;        [:db/retract -2 :schema/name "X"]
+;;        [:db/add -2 :schema/name "O"]))}
+;; {:res {:clara [({:schema/name "X"}) ({:schema/name "O"})],
+;;        :datomic [({:schema/name "X"}) ({:schema/name "X"} {:schema/name "O"})],
+;;        :store [({:schema/name "X"}) ({:schema/name "O"})]},
+;;  :tx (([:db/add -1 :schema/name "X"])
+;;       ([:db/add -1 :schema/name "O"]
+;;        [:db/add -2 :schema/name "O"]
+;;        [:db/retract -2 :schema/name "X"]))})
+;;
+;;----
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/retract -2 :schema/name "X"]
+;;       [:db/add -1 :schema/name "O"]
+;;       [:db/add -2 :schema/name "O"]))
+;;
+;;-> ({:schema/name "X"}, {:schema/name "O"})
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/add -1 :schema/name "O"]
+;;       [:db/retract -2 :schema/name "X"]
+;;       [:db/add -2 :schema/name "O"]))
+;;
+;;-> ({:schema/name "X"}, {:schema/name "O"})
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/add -1 :schema/name "O"]
+;;       [:db/add -2 :schema/name "O"]
+;;       [:db/retract -2 :schema/name "X"]))
+;;->
+;;Execution error (Exceptions$IllegalArgumentExceptionInfo) at datomic.error/argd (error.clj:77).
+;;:db.error/datoms-conflict Two datoms in the same transaction conflict
+;;{:d1 [17592186045463 :schema/name "O" 13194139534358 true], :d2 [17592186045461 :schema/name "O" 13194139534358 true]}
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/retract -2 :schema/name "X"]
+;;       [:db/add -2 :schema/name "O"]
+;;       [:db/add -1 :schema/name "O"]))
+;;
+;;-> ({:schema/name "O"})
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/add -2 :schema/name "O"]
+;;       [:db/retract -2 :schema/name "X"]
+;;       [:db/add -1 :schema/name "O"]))
+;;->
+;;Execution error (Exceptions$IllegalArgumentExceptionInfo) at datomic.error/argd (error.clj:77).
+;;:db.error/datoms-conflict Two datoms in the same transaction conflict
+;;{:d1 [17592186045470 :schema/name "O" 13194139534367 true], :d2 [17592186045472 :schema/name "O" 13194139534367 true]}
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/add -2 :schema/name "O"]
+;;       [:db/add -1 :schema/name "O"]
+;;       [:db/retract -2 :schema/name "X"]))
+;;->
+;;Execution error (Exceptions$IllegalArgumentExceptionInfo) at datomic.error/argd (error.clj:77).
+;;:db.error/datoms-conflict Two datoms in the same transaction conflict
+;;{:d1 [17592186045474 :schema/name "O" 13194139534371 true], :d2 [17592186045476 :schema/name "O" 13194139534371 true]}
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/retract -2 :schema/name "X"]
+;;       [:db/add -1 :schema/name "O"]))
+;;
+;;-> ({:schema/name "O"})
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/retract -2 :schema/name "X"]
+;;       [:db/add -2 :schema/name "O"]))
+;;
+;;-> ({:schema/name "O"})
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/add -1 :schema/name "O"]
+;;       [:db/retract -2 :schema/name "X"]))
+;;
+;;-> ({:schema/name "O"})
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/add -2 :schema/name "O"]
+;;       [:db/retract -2 :schema/name "X"]))
+;;
+;;-> ({:schema/name "O"})
+;;
+;;----
+;;
+;;   [[[:db/retract -2 :schema/name "X"]
+;;     [:db/add -1 :schema/name "O"]
+;;     [:db/add -2 :schema/name "O"]]
+;;    [[:db/add -1 :schema/name "O"]
+;;     [:db/retract -2 :schema/name "X"]
+;;     [:db/add -2 :schema/name "O"]]
+;;    [[:db/add -1 :schema/name "O"]
+;;     [:db/add -2 :schema/name "O"]
+;;     [:db/retract -2 :schema/name "X"]]
+;;    [[:db/retract -2 :schema/name "X"]
+;;     [:db/add -2 :schema/name "O"]
+;;     [:db/add -1 :schema/name "O"]]
+;;    [[:db/add -2 :schema/name "O"]
+;;     [:db/retract -2 :schema/name "X"]
+;;     [:db/add -1 :schema/name "O"]]
+;;    [[:db/add -2 :schema/name "O"]
+;;     [:db/add -1 :schema/name "O"]
+;;     [:db/retract -2 :schema/name "X"]]
+;;    [[:db/retract -2 :schema/name "X"]
+;;     [:db/add -1 :schema/name "O"]]
+;;    [[:db/retract -2 :schema/name "X"]
+;;     [:db/add -2 :schema/name "O"]]
+;;    [[:db/add -1 :schema/name "O"]
+;;     [:db/retract -2 :schema/name "X"]]
+;;    [[:db/add -2 :schema/name "O"]
+;;     [:db/retract -2 :schema/name "X"]]]

@@ -14,6 +14,7 @@
                  [expound "0.8.10"]
                  [differ "0.3.3"]
                  [zprint "1.2.0"]
+                 [org.clojure/math.combinatorics "0.1.6"]
                  [org.clojure/test.check "1.1.1"]
                  [datascript "0.18.4"]
                  [com.datomic/datomic-free "0.9.5697"]]
