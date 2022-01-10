@@ -57,6 +57,34 @@
    "Anamika"
    "Mario Rossi"])
 
+(def datomic-test-cases
+  [[[:db/retract -2 :schema/name "X"]
+    [:db/add -1 :schema/name "O"]
+    [:db/add -2 :schema/name "O"]]
+   [[:db/add -1 :schema/name "O"]
+    [:db/retract -2 :schema/name "X"]
+    [:db/add -2 :schema/name "O"]]
+   [[:db/add -1 :schema/name "O"]
+    [:db/add -2 :schema/name "O"]
+    [:db/retract -2 :schema/name "X"]]
+   [[:db/retract -2 :schema/name "X"]
+    [:db/add -2 :schema/name "O"]
+    [:db/add -1 :schema/name "O"]]
+   [[:db/add -2 :schema/name "O"]
+    [:db/retract -2 :schema/name "X"]
+    [:db/add -1 :schema/name "O"]]
+   [[:db/add -2 :schema/name "O"]
+    [:db/add -1 :schema/name "O"]
+    [:db/retract -2 :schema/name "X"]]
+   [[:db/retract -2 :schema/name "X"]
+    [:db/add -1 :schema/name "O"]]
+   [[:db/retract -2 :schema/name "X"]
+    [:db/add -2 :schema/name "O"]]
+   [[:db/add -1 :schema/name "O"]
+    [:db/retract -2 :schema/name "X"]]
+   [[:db/add -2 :schema/name "O"]
+    [:db/retract -2 :schema/name "X"]]])
+
 ;;
 ;; From test/clara_eav/store_test.cljc
 ;;
@@ -182,15 +210,16 @@
     (doall (mapcat :?entities (rules/query session entities)))))
 
 (defn clara-entities [session]
-   (->> session clara-entities* th/strip-ids (sort-by hash)))
+   (->> session clara-entities* th/strip-ids (sort-by hash) seq))
+
 (defn store-entities [session]
-  (->> session :store store/dump-entity-maps normalize-entity-maps))
+  (->> session :store store/dump-entity-maps normalize-entity-maps seq))
 
 (defn datascript-entities* [db]
   (ds/q '[:find [(pull ?e [*]) ...] :where [?e]] db))
 
 (defn datascript-entities [db]
-  (->> db datascript-entities* normalize-entity-maps))
+  (->> db datascript-entities* normalize-entity-maps seq))
 
 (defn datomic-entities* [db]
   (let [eavs (for [a (map :db/ident d-schema)
@@ -203,68 +232,133 @@
                    (group-by :e eavs))))
 
 (defn datomic-entities [db]
-  (->> db datomic-entities* normalize-entity-maps))
+  (->> db datomic-entities* normalize-entity-maps seq))
 
-(defn run-tx [{:keys [c-sess ds-db d-db res] :as ctx} tx]
-  (let [;; Apply transaction
-        res (or res (merge {:clara [] :store []}
-                           (when ds-db {:datascript []})
-                           (when d-db {:datomic []})))
+(defn- run-clara-tx [c-sess tx]
+  (let [c-sess (try (-> (eav.rules/transact (with-meta c-sess {}) tx)
+                        (rules/fire-rules))
+                    (catch Exception e
+                      (with-meta c-sess {:exception e :tx tx})))]
+    (vary-meta c-sess merge {:entities (clara-entities c-sess)})))
 
-        c-sess (let [c-sess (try (-> (eav.rules/transact (with-meta c-sess {}) tx)
-                                     (rules/fire-rules))
-                                 (catch Exception e
-                                   (with-meta c-sess {:exception e :tx tx})))]
-                 (vary-meta c-sess merge {:c-entities (clara-entities c-sess)
-                                          :s-entities (store-entities c-sess)}))
-        #_#__ (prn :meta-c-sess (meta c-sess))
+(defn- run-clara-store-tx [c-sess tx]
+  ;; clara session but with entities for the store
+  (vary-meta c-sess merge {:entities (store-entities c-sess)}))
 
-        ds-db (when ds-db
-                (let [ds-db (try (ds/db-with (with-meta ds-db {}) tx)
-                                 (catch Exception e
-                                   (with-meta ds-db {:exception e :tx tx})))]
-                  (vary-meta ds-db merge {:entities (datascript-entities ds-db)})))
-        #_#__ (prn :meta-ds-db (meta ds-db))
-        #_#__ (prn :ds-db ds-db)
+(defn- run-datascript-tx [ds-db tx]
+  (let [ds-db (try (ds/db-with (with-meta ds-db {}) tx)
+                   (catch Exception e
+                     (with-meta ds-db {:exception e :tx tx})))]
+    (vary-meta ds-db merge {:entities (datascript-entities ds-db)})))
 
-        ;; TODO c-sort-tx
-        d-tx (sort-by (comp {:db/retract 1 :db/add 2} first)
-                     (map (fn [[A e a v]] [A (get ID->DATOMIC-ID e) a v]) tx))
-        #_#_d-tx (map (fn [[A e a v]] [A (get ID->DATOMIC-ID e) a v]) tx)
-        ;;_ (prn :d-tx d-tx)
-        d-db (when d-db
-               (let [d-db (try (:db-after (d/with (with-meta d-db {}) d-tx))
-                               (catch Exception e
-                                 (with-meta d-db {:exception e :tx tx})))]
-                 (vary-meta d-db merge {:entities (datomic-entities d-db)})))
-        #_#__ (prn :meta-d-db (meta d-db))
+(defn- run-datomic-tx [d-db tx]
+ (let [d-tx (map (fn [[A e a v]] [A (get ID->DATOMIC-ID e) a v]) tx)
+       d-db (try (:db-after (d/with (with-meta d-db {}) d-tx))
+                 (catch Exception e
+                   (with-meta d-db {:exception e :tx tx})))]
+   (vary-meta d-db merge {:entities (datomic-entities d-db)})))
 
-        ;; Gather results
-        res (cond-> res
-              true  (update :clara      conj (let [m (meta c-sess)] (or (:c-entities m) m)))
-              true  (update :store      conj (let [m (meta c-sess)] (or (:s-entities m) m)))
-              ds-db (update :datascript conj (let [m (meta ds-db)]  (or (:entities m)   m)))
-              d-db  (update :datomic    conj (let [m (meta d-db)]   (or (:entities m)   m))))]
-    {:c-sess c-sess
-     :ds-db ds-db
-     :d-db d-db
-     :res res}))
-     
-   
+(defn- run-datomic-ordered-tx [d-db tx]
+ (let [d-tx (sort-by (comp {:db/retract 1 :db/add 2} first)
+              (map (fn [[A e a v]] [A (get ID->DATOMIC-ID e) a v]) tx))
+       d-db (try (:db-after (d/with (with-meta d-db {}) d-tx))
+                 (catch Exception e
+                   (with-meta d-db {:exception e :tx tx})))]
+   (vary-meta d-db merge {:entities (datomic-entities d-db)})))
+
+
+(defn- datomic-behavior? [d-db tx]
+  (let [entities (:entities (meta d-db))
+        ;; TODO XXX NOTE: only handling :schema/name statically, not all unique/ident attributes
+        ident-attrs #{:schema/name}
+
+        temp-retract-ident-in-db?
+        , (fn [db? [A e a v]]
+            (and (= :db/retract A)
+                 (db? [a v])))
+
+        temp-add-diff-ident-not-db?
+        , (fn [db? [re ra rv] [A e a v]]
+            (and (= :db/add A)
+                 (neg? e) ; pre-transformed tempid
+                 (= re e)
+                 (= ra a)
+                 (not= rv v)
+                 (not (db? [a v]))))
+
+        diff-temp-add-diff-ident-not-db?
+        , (fn [[de da dv] [A e a v]]
+            (and (= :db/add A)
+                 (neg? e) ; pre-transformed tempid
+                 (not= de e)
+                 (= da a)
+                 (= dv v)))]
+   (some identity
+     (for [[attr db-ident-avs] (->> (mapcat seq entities)
+                                    (filter (fn [[a v]] (ident-attrs a)))
+                                    (group-by first))
+           :let [db? (set db-ident-avs)
+                 tx-ident-Aeavs (filter (fn [[A e a v]] (= attr a))
+                                        tx)]
+           [rA re ra rv :as rAeav] (filter (partial temp-retract-ident-in-db? db?)
+                                           tx-ident-Aeavs)
+           :when rAeav
+           [dA de da dv :as dAeav] (filter (partial temp-add-diff-ident-not-db? db? [re ra rv])
+                                           tx-ident-Aeavs)
+           :when dAeav]
+         (some (partial diff-temp-add-diff-ident-not-db? [de da dv])
+               tx-ident-Aeavs)))))
+
+;; TODO: Write our own 'shuffle taking a j.u.Random and have a Clara oracle that
+;; shuffles the tx according to a seed on the metadata of the tx
+
+(defn run-tx [ctx tx]
+    (let [;; Apply single transaction to all stores/databases
+          #_ (prn :FOO (and (:d-db ctx) (datomic-behavior? (:d-db ctx) tx)) :tx tx)
+
+          d-behavior-map {:exception true :tx tx :msg "Avoiding datomic behavior"}
+          merge-meta (fn [x m] (with-meta x (merge (meta x) m)))
+          datomic-ish-db (some #{:d-db :do-db} (keys ctx))
+          ctx (if (and datomic-ish-db (datomic-behavior? (datomic-ish-db ctx) tx))
+                (cond-> ctx
+                  true         (update :c-sess merge-meta d-behavior-map)
+                  true         (update :c-sess merge-meta d-behavior-map)
+                  (:ds-db ctx) (update :ds-db  merge-meta d-behavior-map)
+                  (:d-db ctx)  (update :d-db   merge-meta d-behavior-map)
+                  (:do-db ctx) (update :do-db  merge-meta d-behavior-map))
+                (cond-> ctx
+                  true         (update :c-sess run-clara-tx tx)
+                  true         (update :c-sess run-clara-store-tx tx)
+                  (:ds-db ctx) (update :ds-db  run-datascript-tx tx)
+                  (:d-db ctx)  (update :d-db   run-datomic-tx tx)
+                  (:do-db ctx) (update :do-db  run-datomic-ordered-tx tx)))
+
+          ;; Gather results: either exception map or list of current entities
+          rfn (fn [res db]
+                (let [m (meta db)]
+                  (conj (or res []) (if (:exception m) m (get m :entities)))))
+          new-res (cond-> (:res ctx)
+                    true         (update :clara           rfn (:c-sess ctx))
+                    true         (update :store           rfn (:c-sess ctx))
+                    (:ds-db ctx) (update :datascript      rfn (:ds-db ctx))
+                    (:d-db ctx)  (update :datomic         rfn (:d-db ctx))
+                    (:do-db ctx) (update :datomic-ordered rfn (:do-db ctx)))]
+      (assoc ctx :res new-res)))
 
 (defn run-txs [txs oracles]
   (assert (not (and (:datascript oracles) (:datomic oracles)))
           "Simultaneous datascript and datomic oracles not yet supported")
 
-  (let [ctx {:c-sess (if (:datomic oracles)
+  (let [ctx {:c-sess (if (#{:datomic :datomic-ordered} oracles)
                        clara-session-like-datomic
                        clara-session-like-datascript)
              :ds-db (when (:datascript oracles) (ds/empty-db ds-schema))
-             :d-db (when (:datomic oracles) (d/db d-conn))}
+             :d-db (when (:datomic oracles) (d/db d-conn))
+             :do-db (when (:datomic-ordered oracles) (d/db d-conn))}
         ctx-res (reduce run-tx ctx txs)]
         
-     #_(prn :count-txs (count txs) :max-tx-size (apply max 0 (map count txs))
-            :exceptions (count (filter :exception (-> ctx-res :res :datomic))))
+     (prn :count-txs (count txs) :max-tx-size (apply max 0 (map count txs))
+          :exceptions (count (filter :exception (-> ctx-res :res :datomic))))
      ctx-res))
        
 
@@ -277,7 +371,7 @@
   (into {} (for [[k vs] result]
              [k (vec (for [v vs]
                        (if (and (map? v) (contains? v :exception))
-                         (assoc v :exception :ELIDED)
+                         (assoc v :exception (with-meta [:ELIDED] v))
                          v)))])))
 
 (defn check-txs [txs oracles]
@@ -302,13 +396,18 @@
           (let [[added removed] (differ/diff (:clara res) (:datascript res))]
             (zzprint "    " {:datascript added
                              :clara removed})))
-        (when (:datomic oracles)
-          (println "clara/datomic diff:")
-          (let [[added removed] (differ/diff (:clara res) (:datomic res))]
-            (zzprint "    " {:datomic added
-                             :clara removed})))
-        (println "-----")
-        full-res))))
+       (when (:datomic oracles)
+             (println "clara/datomic diff:")
+             (let [[added removed] (differ/diff (:clara res) (:datomic res))]
+               (zzprint "    " {:datomic added
+                                :clara removed})))
+       (when (:datomic-ordered oracles)
+         (println "clara/datomic-ordered diff:")
+         (let [[added removed] (differ/diff (:clara res) (:datomic-ordered res))]
+           (zzprint "    " {:datomic-ordered added
+                            :clara removed})))
+       (println "-----")
+       full-res))))
 
 (defn entity->tx
   [action entity]
@@ -404,6 +503,14 @@
 (defn do-gen-datomic [size]
  (quick-check size txs-prop-datomic))
 
+(defn run-generative-cycles [gen-test-fn size n]
+  (loop [i n]
+    (prn :cycle i)
+    (let [r (gen-test-fn size)]
+      (def res r)
+      (if (and (< 0 i) (:pass? r))
+        (recur (dec i)) r))))
+
 (defn get-all-2x3-cases
   []
   (let [Aeavs-3x3 (for [v ["O" "X"]
@@ -445,6 +552,7 @@
       (let [full-res (:res (run-txs txs oracles))
             res (exception-elide full-res)]
         {:txs txs
+         :res res
          :pass? (apply = (vals res))}))
     cases))
 
@@ -604,3 +712,13 @@
 ;;     [:db/retract -2 :schema/name "X"]]
 ;;    [[:db/add -2 :schema/name "O"]
 ;;     [:db/retract -2 :schema/name "X"]]]
+
+
+;; clara-eav.main=> (-> res :shrunk :smallest first)
+;; [[[:db/add -100 :schema/name "Karel Novak"]] [[:db/add -100 :schema/name "Maksim"]] [[:db/add -2 :schema/name "Maksim"] [:db/retract -2 :schema/name "Karel Novak"]]]
+;; clara-eav.main=> (-> res2 :shrunk :smallest first)
+;; [[[:db/add -20 :schema/name "John Doe"] [:db/retract -2 :schema/name "John Doe"] [:db/retract -20 :schema/name "Maksim"] [:db/add -2 :schema/name "Maksim"]]]
+;; clara-eav.main=> (-> res3 :shrunk :smallest first)
+;; [[[:db/add -100 :schema/name "Jane Doe"]] [[:db/add -100 :schema/name "Jack Ryan"] [:db/add -20 :schema/name "Jack Ryan"] [:db/retract -100 :schema/name "Jane Doe"]] [[:db/add -100 :schema/name "Anamika"] [:db/add -20 :schema/name "Anamika"] [:db/retract -20 :schema/name "Jane Doe"]]]
+;; clara-eav.main=> (-> res4 :shrunk :smallest first)
+;; [[[:db/retract -10 :schema/name "Erika Mustermann"] [:db/add -20 :schema/name "Erika Mustermann"] [:db/add -100 :schema/name "Jack Ryan"] [:db/add -10 :schema/name "Jack Ryan"]]]
