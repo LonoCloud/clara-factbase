@@ -389,6 +389,212 @@
 #_
 ({:schema/name "Maksim"} {:schema/name "Jan Novak"})
 #_
-[[[:db/add -100 :schema/name "Maksim"] [:db/add -20 :schema/name "Jan Novak"]]
+[[[:db/add -100 :schema/name "Maksim"]
+  [:db/add -20 :schema/name "Jan Novak"]]
  [[:db/retract -10 :schema/name "Jan Novak"]
   [:db/add -10 :schema/name "Maksim"]]]
+
+
+;; TODO Datomic throws exception:
+;; ":db.error/datoms-conflict Two datoms in the same transaction conflict
+;;  {:d1 [17592186045431 :schema/name \"Erika Mustermann\" 13194139534326 true],
+;;   :d2 [17592186045431 :schema/name \"John Doe\" 13194139534326 true]}"
+#_
+[[[:db/add -100 :schema/name "Erika Mustermann"]]
+ [[:db/add -100 :schema/name "Erika Mustermann"]
+  [:db/add -20 :schema/name "John Doe"]
+  [:db/retract -100 :schema/name "John Doe"]]]
+;; XXX BUUUUUUUUUTTTTT ... this works and poduces (NOTE order difference):
+#_
+[{:schema/name "John Doe"} {:schema/name "Erika Mustermann"}]
+#_
+[[[:db/add -100 :schema/name "Erika Mustermann"]]
+ [[:db/add -20 :schema/name "John Doe"]
+  [:db/retract -100 :schema/name "John Doe"]
+  [:db/add -100 :schema/name "Erika Mustermann"]]]
+
+
+;; TODO Datomic throws exception:
+#_
+{:d1 [17592186045431 :schema/name "John Doe" 13194139534326 true],
+ :d2 [17592186045431 :schema/name "Erika Mustermann" 13194139534326 true],
+ :db/error :db.error/datoms-conflict}
+#_
+[[[:db/add -100 :schema/name "Erika Mustermann"]]
+ [[:db/add -20 :schema/name "John Doe"]
+  [:db/add -100 :schema/name "Erika Mustermann"]
+  [:db/retract -100 :schema/name "John Doe"]]]
+
+
+;; NOTE this works for all
+#_
+[[[:db/add -100 :schema/name "Erika Mustermann"]]
+ [[:db/retract -100 :schema/name "John Doe"]
+  [:db/add -20 :schema/name "John Doe"]
+  [:db/add -100 :schema/name "Erika Mustermann"]]]
+
+;; NOTE: clara ends up with James while datomic has Maksim and James
+#_
+[[[:db/add -100 :schema/name "Maksim"]]
+ [[:db/add -100 :schema/name "James John Jones"]
+  [:db/retract -10 :schema/name "Maksim"]
+  [:db/add -10 :schema/name "James John Jones"]]]
+
+;; NOTE: Other cases to test
+;;({:res {:clara [({:schema/name "X"}) ({:schema/name "O"})],
+;;        :datomic [({:schema/name "X"}) ({:schema/name "X"} {:schema/name "O"})],
+;;        :store [({:schema/name "X"}) ({:schema/name "O"})]},
+;;  :tx (([:db/add -1 :schema/name "X"])
+;;       ([:db/retract -1 :schema/name "X"]
+;;        [:db/add -2 :schema/name "O"]
+;;        [:db/add -1 :schema/name "O"]))}
+;;
+;; {:res {:clara [({:schema/name "X"}) ({:schema/name "O"})],
+;;        :datomic [({:schema/name "X"}) ({:schema/name "X"} {:schema/name "O"})],
+;;        :store [({:schema/name "X"}) ({:schema/name "O"})]},
+;;  :tx (([:db/add -1 :schema/name "X"])
+;;       ([:db/add -2 :schema/name "O"]
+;;        [:db/retract -1 :schema/name "X"]
+;;        [:db/add -1 :schema/name "O"]))}
+;; {:res {:clara [({:schema/name "X"}) ({:schema/name "O"})],
+;;        :datomic [({:schema/name "X"}) ({:schema/name "X"} {:schema/name "O"})],
+;;        :store [({:schema/name "X"}) ({:schema/name "O"})]},
+;;  :tx (([:db/add -1 :schema/name "X"])
+;;       ([:db/add -2 :schema/name "O"]
+;;        [:db/add -1 :schema/name "O"]
+;;        [:db/retract -1 :schema/name "X"]))}
+;;
+;; {:res {:clara [({:schema/name "X"}) ({:schema/name "O"})],
+;;        :datomic [({:schema/name "X"}) ({:schema/name "X"} {:schema/name "O"})],
+;;        :store [({:schema/name "X"}) ({:schema/name "O"})]},
+;;  :tx (([:db/add -1 :schema/name "X"])
+;;       ([:db/retract -2 :schema/name "X"]
+;;        [:db/add -1 :schema/name "O"]
+;;        [:db/add -2 :schema/name "O"]))}
+;; {:res {:clara [({:schema/name "X"}) ({:schema/name "O"})],
+;;        :datomic [({:schema/name "X"}) ({:schema/name "X"} {:schema/name "O"})],
+;;        :store [({:schema/name "X"}) ({:schema/name "O"})]},
+;;  :tx (([:db/add -1 :schema/name "X"])
+;;       ([:db/add -1 :schema/name "O"]
+;;        [:db/retract -2 :schema/name "X"]
+;;        [:db/add -2 :schema/name "O"]))}
+;; {:res {:clara [({:schema/name "X"}) ({:schema/name "O"})],
+;;        :datomic [({:schema/name "X"}) ({:schema/name "X"} {:schema/name "O"})],
+;;        :store [({:schema/name "X"}) ({:schema/name "O"})]},
+;;  :tx (([:db/add -1 :schema/name "X"])
+;;       ([:db/add -1 :schema/name "O"]
+;;        [:db/add -2 :schema/name "O"]
+;;        [:db/retract -2 :schema/name "X"]))})
+;;
+;;----
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/retract -2 :schema/name "X"]
+;;       [:db/add -1 :schema/name "O"]
+;;       [:db/add -2 :schema/name "O"]))
+;;
+;;-> ({:schema/name "X"}, {:schema/name "O"})
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/add -1 :schema/name "O"]
+;;       [:db/retract -2 :schema/name "X"]
+;;       [:db/add -2 :schema/name "O"]))
+;;
+;;-> ({:schema/name "X"}, {:schema/name "O"})
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/add -1 :schema/name "O"]
+;;       [:db/add -2 :schema/name "O"]
+;;       [:db/retract -2 :schema/name "X"]))
+;;->
+;;Execution error (Exceptions$IllegalArgumentExceptionInfo) at datomic.error/argd (error.clj:77).
+;;:db.error/datoms-conflict Two datoms in the same transaction conflict
+;;{:d1 [17592186045463 :schema/name "O" 13194139534358 true], :d2 [17592186045461 :schema/name "O" 13194139534358 true]}
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/retract -2 :schema/name "X"]
+;;       [:db/add -2 :schema/name "O"]
+;;       [:db/add -1 :schema/name "O"]))
+;;
+;;-> ({:schema/name "O"})
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/add -2 :schema/name "O"]
+;;       [:db/retract -2 :schema/name "X"]
+;;       [:db/add -1 :schema/name "O"]))
+;;->
+;;Execution error (Exceptions$IllegalArgumentExceptionInfo) at datomic.error/argd (error.clj:77).
+;;:db.error/datoms-conflict Two datoms in the same transaction conflict
+;;{:d1 [17592186045470 :schema/name "O" 13194139534367 true], :d2 [17592186045472 :schema/name "O" 13194139534367 true]}
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/add -2 :schema/name "O"]
+;;       [:db/add -1 :schema/name "O"]
+;;       [:db/retract -2 :schema/name "X"]))
+;;->
+;;Execution error (Exceptions$IllegalArgumentExceptionInfo) at datomic.error/argd (error.clj:77).
+;;:db.error/datoms-conflict Two datoms in the same transaction conflict
+;;{:d1 [17592186045474 :schema/name "O" 13194139534371 true], :d2 [17592186045476 :schema/name "O" 13194139534371 true]}
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/retract -2 :schema/name "X"]
+;;       [:db/add -1 :schema/name "O"]))
+;;
+;;-> ({:schema/name "O"})
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/retract -2 :schema/name "X"]
+;;       [:db/add -2 :schema/name "O"]))
+;;
+;;-> ({:schema/name "O"})
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/add -1 :schema/name "O"]
+;;       [:db/retract -2 :schema/name "X"]))
+;;
+;;-> ({:schema/name "O"})
+;;
+;;:txs (([:db/add -1 :schema/name "X"])
+;;      ([:db/add -2 :schema/name "O"]
+;;       [:db/retract -2 :schema/name "X"]))
+;;
+;;-> ({:schema/name "O"})
+;;
+;;----
+;;
+;;   [[[:db/retract -2 :schema/name "X"]
+;;     [:db/add -1 :schema/name "O"]
+;;     [:db/add -2 :schema/name "O"]]
+;;    [[:db/add -1 :schema/name "O"]
+;;     [:db/retract -2 :schema/name "X"]
+;;     [:db/add -2 :schema/name "O"]]
+;;    [[:db/add -1 :schema/name "O"]
+;;     [:db/add -2 :schema/name "O"]
+;;     [:db/retract -2 :schema/name "X"]]
+;;    [[:db/retract -2 :schema/name "X"]
+;;     [:db/add -2 :schema/name "O"]
+;;     [:db/add -1 :schema/name "O"]]
+;;    [[:db/add -2 :schema/name "O"]
+;;     [:db/retract -2 :schema/name "X"]
+;;     [:db/add -1 :schema/name "O"]]
+;;    [[:db/add -2 :schema/name "O"]
+;;     [:db/add -1 :schema/name "O"]
+;;     [:db/retract -2 :schema/name "X"]]
+;;    [[:db/retract -2 :schema/name "X"]
+;;     [:db/add -1 :schema/name "O"]]
+;;    [[:db/retract -2 :schema/name "X"]
+;;     [:db/add -2 :schema/name "O"]]
+;;    [[:db/add -1 :schema/name "O"]
+;;     [:db/retract -2 :schema/name "X"]]
+;;    [[:db/add -2 :schema/name "O"]
+;;     [:db/retract -2 :schema/name "X"]]]
+
+
+;; clara-eav.main=> (-> res :shrunk :smallest first)
+;; [[[:db/add -100 :schema/name "Karel Novak"]] [[:db/add -100 :schema/name "Maksim"]] [[:db/add -2 :schema/name "Maksim"] [:db/retract -2 :schema/name "Karel Novak"]]]
+;; clara-eav.main=> (-> res2 :shrunk :smallest first)
+;; [[[:db/add -20 :schema/name "John Doe"] [:db/retract -2 :schema/name "John Doe"] [:db/retract -20 :schema/name "Maksim"] [:db/add -2 :schema/name "Maksim"]]]
+;; clara-eav.main=> (-> res3 :shrunk :smallest first)
+;; [[[:db/add -100 :schema/name "Jane Doe"]] [[:db/add -100 :schema/name "Jack Ryan"] [:db/add -20 :schema/name "Jack Ryan"] [:db/retract -100 :schema/name "Jane Doe"]] [[:db/add -100 :schema/name "Anamika"] [:db/add -20 :schema/name "Anamika"] [:db/retract -20 :schema/name "Jane Doe"]]]
+;; clara-eav.main=> (-> res4 :shrunk :smallest first)
+;; [[[:db/retract -10 :schema/name "Erika Mustermann"] [:db/add -20 :schema/name "Erika Mustermann"] [:db/add -100 :schema/name "Jack Ryan"] [:db/add -10 :schema/name "Jack Ryan"]]]
