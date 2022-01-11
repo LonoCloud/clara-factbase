@@ -449,7 +449,7 @@
                               (= :cardinality/one (-> a attrs :cardinality))
                               (not= idx-v ::absentx)
                               (not= v idx-v))
-                     (prn :keeping e a v idx-v)
+                     #_(prn :keeping e a v idx-v)
                      (with-meta (eav/->EAV e a idx-v)
                                 (merge eav-meta {:action :db/retract
                                                  :synthetic-retract true})))))
