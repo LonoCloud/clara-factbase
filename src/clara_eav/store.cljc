@@ -393,18 +393,8 @@
   (loop [eavs tx-eavs]
     (let [tx-ident-eavs (filter (comp #{:unique/identity} :unique attrs :a) eavs)
           ;; Map of attr-val to set of eids for identity eavs across the DB and tx eavs
-          #_ (prn :eavs eavs)
-          #_ (prn :temp-eavs temp-eavs)
           temp-eavs (filter (comp tempid? :e) tx-ident-eavs)
           ident-av-e-set (merge-av-e-set ident-index temp-eavs)
-          #_#_
-          ident-av-e-set (into {}
-                               (for [[e a v :as eav] tx-ident-eavs
-                                     :let [ident-e (:e (get ident-index [a v]))]]
-                                 [eav (if ident-e
-                                        (conj #{e} ident-e)
-                                        #{e})]))
-
           ;; Create unification ready list of all tx-eav entities (as
           ;; singleton sets) and the entity sets from ident-av-e-set.
           all-eid-sets (concat (map (comp hash-set :e) eavs)
@@ -422,12 +412,6 @@
                                  tmpid tmpid-set]
                              [tmpid id]))
           unified-eavs (remap-ids :pre-upsert attrs id-mapping eavs)]
-
-      ;; TODO: remove the below
-      #_(when (seq many-eids-violations)
-          (throw (ex-info "Violation of :unique/ident attributes."
-                          {:ident-av-e-set ident-av-e-set
-                           :unified-eids unified-eids})))
 
       (if (= unified-eavs eavs)
         unified-eavs
@@ -447,7 +431,6 @@
                               (= :cardinality/one (-> a attrs :cardinality))
                               (not= idx-v ::absentx)
                               (not= v idx-v))
-                     #_(prn :keeping e a v idx-v)
                      (with-meta (eav/->EAV e a idx-v)
                                 (merge eav-meta {:action :db/retract
                                                  :synthetic-retract true})))))
@@ -633,11 +616,8 @@
              {tx-adds :db/add tx-retracts :db/retract}
              , (group-by (comp :action meta)
                          (remove (comp :synthetic-retract meta) eavs))
-             #_ (prn :tx-adds tx-adds)
-             #_ (prn :tx-retracts tx-retracts)
              cxeavs (concat (map #(cxeav-fn :db/add %)     tx-adds)
                             (map #(cxeav-fn :db/retract %) tx-retracts))
-             #_ (prn :cxeavs cxeavs)
              collisions [{:reason :eav-add-retract
                           :msg "Cannot add and retract the same EAV"
                           :col-fn (fn [c x e a v]
@@ -661,7 +641,6 @@
                                   :let [{:keys [group collides] :as hit?} (col-fn c x e a v)]
                                   :when hit?]
                              (with-meta collides {:group group :ctx [c x e a v] :reason reason})))
-             #_ (prn :groups groups)
              tx-conflicts (filter (fn [[k v]]
                                    (< 1 (count (set v))))
                                 groups)]
