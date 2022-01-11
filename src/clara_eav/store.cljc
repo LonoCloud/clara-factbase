@@ -393,11 +393,9 @@
   (loop [eavs tx-eavs]
     (let [tx-ident-eavs (filter (comp #{:unique/identity} :unique attrs :a) eavs)
           ;; Map of attr-val to set of eids for identity eavs across the DB and tx eavs
-          temp-eavs (filter (fn [[e a v]]
-                                (tempid? e))
-                            tx-ident-eavs)
           #_ (prn :eavs eavs)
           #_ (prn :temp-eavs temp-eavs)
+          temp-eavs (filter (comp tempid? :e) tx-ident-eavs)
           ident-av-e-set (merge-av-e-set ident-index temp-eavs)
           #_#_
           ident-av-e-set (into {}
