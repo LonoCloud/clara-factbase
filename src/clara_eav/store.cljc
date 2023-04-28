@@ -78,7 +78,7 @@
 (s/fdef tempid?
   :args (s/cat :e ::eav/e)
   :ret boolean?)
-(defn- tempid?
+(defn tempid?
   "True if `e` is a tempid. Strings and negative ints are tempids; keywords,
   positive ints and uuids are not."
   [e]
@@ -366,7 +366,7 @@
   (as-> eavs new-eavs
     (map (fn [[e a v :as eav]]
            (let [e' (get id-mapping e e)
-                 v' (if (ref-eav? attrs a)
+                 v' (if (ref-eav? attrs eav)
                       (get id-mapping v v)
                       v)]
              (with-meta (eav/->EAV e' a v')
@@ -392,8 +392,11 @@
   [{:keys [attrs ident-index]} tx-eavs]
   (loop [eavs tx-eavs]
     (let [tx-ident-eavs (filter (comp #{:unique/identity} :unique attrs :a) eavs)
+          temp-eavs (remove (fn [[e a v :as eav]]
+                              (and (->> eav meta :action (= :db/retract))
+                                   (not (tempid? e))))
+                            tx-ident-eavs)
           ;; Map of attr-val to set of eids for identity eavs across the DB and tx eavs
-          temp-eavs (filter (comp tempid? :e) tx-ident-eavs)
           ident-av-e-set (merge-av-e-set ident-index temp-eavs)
           ;; Create unification ready list of all tx-eav entities (as
           ;; singleton sets) and the entity sets from ident-av-e-set.
@@ -537,6 +540,10 @@
   [{:keys [attrs options] :as store} eavs]
   (reduce +eav store eavs))
 
+(s/fdef check-schema
+  :args (s/cat :mode #{:enforce :warn :ignore nil}
+               :attrs ::attrs
+               :eavs ::record-seq))
 (defn check-schema
   [mode attrs eavs]
   (when (#{:enforce :warn} mode)
@@ -661,8 +668,7 @@
             :warn (binding [*out* *err*] (println (str msg " " (pr-str tx-conflicts)))))))))))
 
 (s/fdef tx->eav-seq
-  :args (s/cat :action ::action
-               :tx ::tx-vector-seq)
+  :args (s/cat :tx ::tx-vector-seq)
   :ret ::eav-seq)
 (defn- tx->eav-seq [tx]
   (for [[A e a v] tx]
@@ -674,11 +680,11 @@
                :tx    ::tx-vector-seq)
   :ret ::store-tx)
 (defn transact*
-  [{:keys [schema-mode attrs] :as store} tx]
+  [{:keys [options attrs] :as store} tx]
   (let [store (assoc store :insertables [] :retractables []
                            :tempids {}) ;; TODO rename to tempid-map
         eavs (tx->eav-seq tx)
-        _ (check-schema schema-mode attrs eavs)
+        _ (check-schema (:schema-mode options) attrs eavs)
         eavs (merge-unique-identities store eavs)
         eavs (upsert-derived-retracts store eavs)
         {:keys [store eavs]} (apply-new-ids store eavs)
@@ -688,3 +694,75 @@
         store (reduce +eav store (filter (comp #{:db/add} :action meta) eavs))
         _ (check-tx-conflicts store eavs)]
     store))
+
+;; - synthetic retracts for card/one update (E A v')
+;; - card/many add of same - (net noop)
+;; - card/many add of missing - add
+;; - card/many retract of existing - (retract)
+;; - card/many retract of missing - (noop)
+;; - unique/ident
+;;   - e A V in TX & DB --  e->E  (upsert)
+;;   - e,e' A V in TX & TX --  e,e' (merge upsert)
+;; - something, something ref tempids
+;;   - uniq/ident refs
+;; - Assign new IDs to temp ID adds
+;; - Assign new IDs to temp ID retracts -> noop (datomic,we but not datascript)
+
+;; fail if a2 before a1 and r2
+;;
+;; r1 a2 a1 r2 - X
+;; r1 a2 r2 a1 - X
+;; a2 r1 a1 r2 - X
+;; a2 r1 r2 a1 - X
+;; a1 r1 a2 r2 - P
+;; r1 a1 a2 r2 - P
+;; r1 a1 r2 a2 - P
+;; a1 r1 r2 a2 - P
+;;
+;; r1 r2 a1 a2 - P
+;; r1 r2 a2 a1 - P
+;;
+;; r2 a1 r1 a2 - X
+;; r2 r1 a1 a2 - P
+;; r2 r1 a2 a1 - P
+
+;; r1 a1 a2 r2 - P
+;; r2 a1 a2 r1 - X ********* (except this) **********
+;; r2 a2 a1 r1 - P
+;;
+;; and why not "fail if a1 before a2 and r1"?
+
+
+[false [a1 r2 a2 r1]]
+[false [a1 r2 r1 a2]]
+
+[false [a2 r1 a1 r2]]
+[false [a2 r1 r2 a1]]
+
+[false [r1 a2 a1 r2]]
+[false [r1 a2 r2 a1]]
+
+[false [r2 a1 a2 r1]]
+[false [r2 a1 r1 a2]]
+
+
+[true  [a1 r1 a2 r2]]
+[true  [a2 r2 a1 r1]]
+[true  [r1 a1 r2 a2]]
+[true  [r2 a2 r1 a1]]
+
+
+[true  [a1 a2 r1 r2]]
+[true  [a1 a2 r2 r1]]
+[true  [a2 a1 r1 r2]]
+[true  [a2 a1 r2 r1]]
+
+[true  [a2 r2 r1 a1]]
+[true  [a1 r1 r2 a2]]
+[true  [r1 a1 a2 r2]]
+[true  [r2 a2 a1 r1]]
+
+[true  [r1 r2 a1 a2]]
+[true  [r1 r2 a2 a1]]
+[true  [r2 r1 a1 a2]]
+[true  [r2 r1 a2 a1]]

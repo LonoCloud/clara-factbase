@@ -14,8 +14,22 @@
 (defmulti strip-ids (fn [s] (type s)))
 (defmethod strip-ids #?(:clj clojure.lang.PersistentArrayMap
                         :cljs cljs.core.PersistentArrayMap)
-  [entity] (dissoc entity :eav/eid :db/id))
+  [entity]
+  (with-meta
+    (dissoc entity :eav/eid :db/id)
+    {:db/id (if (:db/id entity)
+              (:db/id entity)
+              (:eav/eid entity))}))
 (defmethod strip-ids :default
   [collection] (map strip-ids collection))
+
+;; (defn strip-ids
+;;   [entities]
+;;   (for [entity entities]
+;;     (with-meta
+;;       (dissoc entity :eav/eid :db/id)
+;;       {:db/id (if (:db/id entity)
+;;                 (:db/id entity)
+;;                 (:eav/eid entity))})))
 
 (defn set= [& vectors] (apply = (map set vectors)))
